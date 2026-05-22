@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Environment variables — NEVER commit these
+.env
+.env.local
+.env.*.local
+server/.env
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+
+# Supabase local (Docker volumes, not needed in repo)
+supabase/.branches/
+supabase/.temp/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# React Native / Expo
+apps/mobile/.expo/
+apps/mobile/android/
+apps/mobile/ios/
