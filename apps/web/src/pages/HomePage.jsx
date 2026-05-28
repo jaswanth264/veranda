@@ -4,37 +4,37 @@ import { getListings } from '../api/listings';
 import Layout from '../components/Layout';
 import ListingCard from '../components/ListingCard';
 
-const CATEGORIES = [
-  { key: '',         label: 'All',           icon: '🏠' },
-  { key: 'tiffin',  label: 'Tiffin',         icon: '🍱' },
-  { key: 'services', label: 'Home Services', icon: '🔧' },
+// Emoji-based categories — always render, no external image dependency
+const SERVICES_CATS = [
+  { key: 'plumber',     label: 'Plumber',       emoji: '🔧' },
+  { key: 'electrician', label: 'Electrician',   emoji: '⚡' },
+  { key: 'cleaning',    label: 'Cleaner',       emoji: '🧹' },
 ];
 
-const SUBCATEGORIES = [
-  { key: '',            label: 'All',            icon: '✨', type: null },
-  { key: 'tiffin',     label: 'Tiffin Service',  icon: '🍱', type: 'tiffin' },
-  { key: 'homecook',   label: 'Home Cook',       icon: '👨‍🍳', type: 'tiffin' },
-  { key: 'plumber',    label: 'Plumber',         icon: '🔧', type: 'services' },
-  { key: 'electrician',label: 'Electrician',     icon: '⚡', type: 'services' },
-  { key: 'cleaning',   label: 'Cleaning',        icon: '🧹', type: 'services' },
-  { key: 'carpenter',  label: 'Carpenter',       icon: '🪚', type: 'services' },
-  { key: 'painter',    label: 'Painter',         icon: '🎨', type: 'services' },
-  { key: 'ac',         label: 'AC Repair',       icon: '❄️', type: 'services' },
+const FOOD_CATS = [
+  { key: 'tiffin',   label: 'Tiffin Service', emoji: '🍱' },
+  { key: 'homecook', label: 'Home Cook',       emoji: '👩‍🍳' },
+];
+
+const ALL_CATS = [
+  { key: 'plumber',     label: 'Plumber',        emoji: '🔧' },
+  { key: 'electrician', label: 'Electrician',    emoji: '⚡' },
+  { key: 'cleaning',    label: 'House Cleaning', emoji: '🧹' },
+  { key: 'carpenter',   label: 'Carpenter',      emoji: '🪚' },
+  { key: 'painter',     label: 'Painter',        emoji: '🎨' },
+  { key: 'ac',          label: 'AC Repair',      emoji: '❄️' },
+  { key: 'tiffin',      label: 'Tiffin Service', emoji: '🍱' },
+  { key: 'homecook',    label: 'Home Cook',      emoji: '👩‍🍳' },
 ];
 
 function SkeletonCard() {
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden animate-pulse">
-      <div className="h-1.5 bg-gray-200 w-full" />
-      <div className="p-4 space-y-3">
-        <div className="h-3 bg-gray-100 rounded w-1/3" />
-        <div className="h-4 bg-gray-200 rounded w-2/3" />
-        <div className="h-3 bg-gray-100 rounded w-full" />
-        <div className="h-3 bg-gray-100 rounded w-5/6" />
-        <div className="flex justify-between pt-2 border-t border-gray-100">
-          <div className="h-5 bg-gray-200 rounded w-16" />
-          <div className="h-3 bg-gray-100 rounded w-12" />
-        </div>
+    <div className="bg-white rounded-2xl overflow-hidden animate-pulse shadow-sm">
+      <div className="h-36 bg-gray-200" />
+      <div className="p-4 space-y-2">
+        <div className="h-4 bg-gray-100 rounded w-2/3" />
+        <div className="h-3 bg-gray-100 rounded w-1/2" />
+        <div className="h-5 bg-gray-200 rounded w-1/3 mt-2" />
       </div>
     </div>
   );
@@ -49,7 +49,6 @@ export default function HomePage() {
     queryFn: () => getListings({ category: activeType || undefined, limit: 50 }).then((r) => r.data.listings),
   });
 
-  // Client-side search filter on top of server results
   const listings = (data || []).filter((l) => {
     if (!search.trim()) return true;
     const q = search.toLowerCase();
@@ -63,82 +62,144 @@ export default function HomePage() {
 
   return (
     <Layout>
-      {/* Hero */}
-      <div className="bg-gradient-to-br from-orange-500 to-orange-600 text-white px-4 py-10">
-        <div className="max-w-2xl mx-auto text-center">
-          <h1 className="text-3xl sm:text-4xl font-bold mb-2">
-            Services & Tiffin near you
+      {/* Hero — real street background photo */}
+      <div
+        className="relative"
+        style={{
+          backgroundImage: `url('https://images.unsplash.com/photo-1600585154526-990dced4db0d?w=1400&auto=format&fit=crop&q=80')`,
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+          minHeight: '340px',
+        }}
+      >
+        {/* Dark overlay */}
+        <div className="absolute inset-0" style={{ backgroundColor: 'rgba(15,46,43,0.72)' }} />
+
+        <div className="relative z-10 max-w-6xl mx-auto px-6 pt-14 pb-8">
+          <h1 className="text-white font-bold text-3xl md:text-4xl leading-snug max-w-lg">
+            Welcome to Veranda, Vijayawada!<br />
+            Find Trusted Local Help &amp; Authentic Home Food.
           </h1>
-          <p className="text-orange-100 text-sm mb-6">
-            Vijayawada · Gudivada · Andhra Pradesh
-          </p>
 
           {/* Search bar */}
-          <div className="relative max-w-lg mx-auto">
-            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400">🔍</span>
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search tiffin, plumber, electrician…"
-              className="w-full bg-white text-gray-800 rounded-xl pl-10 pr-4 py-3 text-sm shadow-lg focus:outline-none focus:ring-2 focus:ring-white/50"
-            />
+          <div className="mt-6 max-w-xl">
+            <div className="relative">
+              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 text-lg">🔍</span>
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search tiffin, plumber, AC repair…"
+                className="w-full bg-white text-gray-800 rounded-xl pl-11 pr-4 py-3.5 text-sm shadow-lg focus:outline-none focus:ring-2"
+                style={{ '--tw-ring-color': '#f59e0b' }}
+              />
+            </div>
+          </div>
+
+          {/* Two-panel category card overlapping hero bottom */}
+          <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-4 max-w-2xl">
+            {/* Home Services panel */}
+            <button
+              onClick={() => setActiveType('services')}
+              className="rounded-2xl p-5 text-left transition-all hover:scale-[1.02]"
+              style={{ backgroundColor: '#1a4a47' }}
+            >
+              <h3 className="text-white font-bold text-lg mb-3">Home Services</h3>
+              <div className="flex gap-4">
+                {SERVICES_CATS.slice(0, 3).map((c) => (
+                  <div key={c.key} className="flex flex-col items-center gap-1">
+                    <div className="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center text-2xl">
+                      {c.emoji}
+                    </div>
+                    <span className="text-white/80 text-xs">{c.label}</span>
+                  </div>
+                ))}
+              </div>
+            </button>
+
+            {/* Tiffin & Food panel */}
+            <button
+              onClick={() => setActiveType('tiffin')}
+              className="rounded-2xl p-5 text-left transition-all hover:scale-[1.02]"
+              style={{ backgroundColor: '#f59e0b' }}
+            >
+              <h3 className="font-bold text-lg mb-3" style={{ color: '#1a4a47' }}>Tiffin &amp; Food</h3>
+              <div className="flex gap-6">
+                {FOOD_CATS.map((c) => (
+                  <div key={c.key} className="flex flex-col items-center gap-1">
+                    <div className="w-12 h-12 rounded-full bg-white/30 flex items-center justify-center text-2xl">
+                      {c.emoji}
+                    </div>
+                    <span className="text-sm font-medium" style={{ color: '#1a4a47' }}>{c.label}</span>
+                  </div>
+                ))}
+              </div>
+            </button>
           </div>
         </div>
       </div>
 
-      <div className="max-w-5xl mx-auto px-4 py-6 space-y-6">
-
-        {/* Category type pills */}
-        <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
-          {CATEGORIES.map((c) => (
+      {/* Category icon grid */}
+      <div className="max-w-6xl mx-auto px-6 py-8">
+        <div className="grid grid-cols-4 md:grid-cols-8 gap-3">
+          {ALL_CATS.map((c) => (
             <button
               key={c.key}
               onClick={() => setActiveType(c.key)}
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap border transition-all shrink-0 ${
-                activeType === c.key
-                  ? 'bg-orange-500 text-white border-orange-500'
-                  : 'bg-white text-gray-600 border-gray-200 hover:border-orange-300'
-              }`}
+              className="flex flex-col items-center gap-2 group"
             >
-              <span>{c.icon}</span> {c.label}
+              <div
+                className="w-full aspect-square rounded-2xl flex items-center justify-center text-4xl transition-all group-hover:scale-105 shadow-sm"
+                style={{
+                  backgroundColor: activeType === c.key ? '#fef3c7' : '#fff',
+                  border: activeType === c.key ? '2px solid #f59e0b' : '2px solid #e5e7eb',
+                }}
+              >
+                {c.emoji}
+              </div>
+              <span className="text-xs font-medium text-center leading-tight" style={{ color: '#1a4a47' }}>
+                {c.label}
+              </span>
             </button>
           ))}
         </div>
 
-        {/* Sub-category scroll (Urban Company style) */}
-        <div className="flex gap-3 overflow-x-auto pb-1 scrollbar-hide">
-          {SUBCATEGORIES.map((c) => (
+        {/* Filter pills */}
+        <div className="flex gap-2 mt-6 flex-wrap">
+          {[
+            { key: '', label: 'All' },
+            { key: 'tiffin', label: 'Tiffin & Food' },
+            { key: 'services', label: 'Home Services' },
+          ].map((f) => (
             <button
-              key={c.key}
-              onClick={() => setActiveType(c.type || '')}
-              className="flex flex-col items-center gap-1 shrink-0 group"
+              key={f.key}
+              onClick={() => setActiveType(f.key)}
+              className="px-5 py-1.5 rounded-full text-sm font-medium transition-all"
+              style={
+                activeType === f.key
+                  ? { backgroundColor: '#1a4a47', color: '#fff' }
+                  : { backgroundColor: '#fff', color: '#1a4a47', border: '1.5px solid #d1d5db' }
+              }
             >
-              <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl border-2 transition-all ${
-                activeType === (c.type || '') && c.key !== ''
-                  ? 'border-orange-500 bg-orange-50'
-                  : 'border-gray-100 bg-white group-hover:border-orange-300'
-              }`}>
-                {c.icon}
-              </div>
-              <span className="text-xs text-gray-500 font-medium">{c.label}</span>
+              {f.label}
             </button>
           ))}
         </div>
 
         {/* Results header */}
-        <div className="flex items-center justify-between">
-          <h2 className="font-semibold text-gray-700">
+        <div className="flex items-center justify-between mt-6 mb-4">
+          <h2 className="font-semibold text-base" style={{ color: '#1a4a47' }}>
             {isLoading
               ? 'Loading…'
               : listings.length === 0
               ? 'No listings found'
-              : `${listings.length} listing${listings.length !== 1 ? 's' : ''} available`}
+              : `${listings.length} listing${listings.length !== 1 ? 's' : ''} near you`}
           </h2>
           {search && (
             <button
               onClick={() => setSearch('')}
-              className="text-xs text-orange-500 hover:underline"
+              className="text-xs hover:underline"
+              style={{ color: '#f59e0b' }}
             >
               Clear search
             </button>
@@ -147,17 +208,17 @@ export default function HomePage() {
 
         {/* Listings grid */}
         {isLoading ? (
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-            {[...Array(6)].map((_, i) => <SkeletonCard key={i} />)}
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            {[...Array(8)].map((_, i) => <SkeletonCard key={i} />)}
           </div>
         ) : listings.length === 0 ? (
-          <div className="text-center py-16">
-            <p className="text-5xl mb-4">🔍</p>
-            <p className="text-gray-500 font-medium">No listings yet in this category</p>
-            <p className="text-gray-400 text-sm mt-1">Check back soon or try a different category</p>
+          <div className="text-center py-20">
+            <p className="text-4xl mb-3">🔍</p>
+            <p className="font-semibold text-gray-600">No listings yet in this area</p>
+            <p className="text-sm text-gray-400 mt-1">Check back soon or try a different category</p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
             {listings.map((listing) => (
               <ListingCard key={listing.id} listing={listing} />
             ))}
@@ -167,3 +228,4 @@ export default function HomePage() {
     </Layout>
   );
 }
+

@@ -1,12 +1,15 @@
+import { useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { getListingById } from '../api/listings';
 import { useAuth } from '../context/AuthContext';
 import Layout from '../components/Layout';
+import BookingModal from '../components/BookingModal';
 
 export default function ListingDetailPage() {
   const { id } = useParams();
   const { user } = useAuth();
+  const [showBooking, setShowBooking] = useState(false);
 
   const { data: listing, isLoading, isError } = useQuery({
     queryKey: ['listing', id],
@@ -32,53 +35,67 @@ export default function ListingDetailPage() {
     );
   }
 
-  const vendor = listing.vendor_profiles;
+  const isOwnListing = user?.role === 'vendor' &&
+    listing.vendor_profiles?.user_id === user.id;
 
   return (
     <Layout>
       <div className="max-w-2xl mx-auto px-4 py-8 space-y-4">
+
+        {/* Image area */}
+        <div
+          className="rounded-2xl flex items-center justify-center text-7xl"
+          style={{ height: '200px', backgroundColor: '#fef3c7' }}
+        >
+          {listing.categories?.icon || '🏠'}
+        </div>
 
         {/* Listing card */}
         <div className="bg-white rounded-2xl border border-gray-200 p-6">
           <div className="flex items-start justify-between gap-3">
             <div className="flex-1">
               <div className="flex items-center gap-2 mb-1">
-                <span className="text-lg">{listing.categories?.icon}</span>
-                <span className="text-xs text-gray-400">{listing.categories?.name}</span>
+                <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ backgroundColor: '#fef3c7', color: '#1a4a47' }}>
+                  {listing.categories?.name}
+                </span>
               </div>
-              <h1 className="text-xl font-bold text-gray-800">{listing.title}</h1>
+              <h1 className="text-xl font-bold mt-2" style={{ color: '#1a4a47' }}>{listing.title}</h1>
               {listing.description && (
                 <p className="text-sm text-gray-500 mt-2">{listing.description}</p>
               )}
             </div>
             <div className="text-right shrink-0">
-              <p className="text-2xl font-bold text-orange-500">₹{parseFloat(listing.price).toFixed(0)}</p>
+              <p className="text-2xl font-bold" style={{ color: '#1a4a47' }}>₹{parseFloat(listing.price).toFixed(0)}</p>
               <p className="text-xs text-gray-400">{listing.unit}</p>
             </div>
           </div>
         </div>
 
         {/* Vendor info */}
-        {vendor && (
+        {listing.vendor_profiles && (
           <div className="bg-white rounded-2xl border border-gray-200 p-6">
             <p className="text-xs text-gray-400 uppercase tracking-wide mb-3">Service Provider</p>
             <div className="flex items-start gap-3">
-              <div className="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center text-orange-500 font-bold text-lg shrink-0">
-                {vendor.business_name?.[0]}
+              <div
+                className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-lg shrink-0"
+                style={{ backgroundColor: '#fef3c7', color: '#1a4a47' }}
+              >
+                {listing.vendor_profiles.business_name?.[0]}
               </div>
               <div className="flex-1">
                 <div className="flex items-center gap-2">
-                  <h2 className="font-semibold text-gray-800">{vendor.business_name}</h2>
-                  {vendor.is_verified && (
+                  <h2 className="font-semibold" style={{ color: '#1a4a47' }}>{listing.vendor_profiles.business_name}</h2>
+                  {listing.vendor_profiles.is_verified && (
                     <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">✓ Verified</span>
                   )}
                 </div>
-                {vendor.address && (
-                  <p className="text-sm text-gray-500 mt-0.5">📍 {vendor.address}</p>
+                {listing.vendor_profiles.address && (
+                  <p className="text-sm text-gray-500 mt-0.5">📍 {listing.vendor_profiles.address}</p>
                 )}
-                {vendor.rating > 0 && (
-                  <p className="text-sm text-gray-500 mt-0.5">
-                    ⭐ {vendor.rating.toFixed(1)} ({vendor.total_reviews} reviews)
+                {listing.vendor_profiles.rating > 0 && (
+                  <p className="text-sm mt-0.5" style={{ color: '#f59e0b' }}>
+                    ★ {listing.vendor_profiles.rating.toFixed(1)}
+                    <span className="text-gray-400 ml-1">({listing.vendor_profiles.total_reviews} reviews)</span>
                   </p>
                 )}
               </div>
@@ -87,24 +104,30 @@ export default function ListingDetailPage() {
         )}
 
         {/* Book button */}
-        {user?.role === 'customer' ? (
-          <button
-            disabled
-            className="w-full bg-orange-500 opacity-60 text-white font-semibold py-3 rounded-xl"
-            title="Booking coming in next step"
-          >
-            Book Now — Coming Soon
-          </button>
-        ) : !user ? (
+        {!user ? (
           <Link
             to="/login"
-            className="block text-center w-full bg-orange-500 hover:bg-orange-600 text-white font-semibold py-3 rounded-xl transition-colors"
+            className="block text-center w-full py-3.5 rounded-xl font-semibold text-white transition-colors"
+            style={{ backgroundColor: '#1a4a47' }}
           >
             Login to Book
           </Link>
+        ) : user.role === 'customer' && !isOwnListing ? (
+          <button
+            onClick={() => setShowBooking(true)}
+            className="w-full py-3.5 rounded-xl font-semibold text-white transition-all hover:opacity-90"
+            style={{ backgroundColor: '#1a4a47' }}
+          >
+            Book Now
+          </button>
         ) : null}
 
       </div>
+
+      {/* Booking Modal */}
+      {showBooking && (
+        <BookingModal listing={listing} onClose={() => setShowBooking(false)} />
+      )}
     </Layout>
   );
 }

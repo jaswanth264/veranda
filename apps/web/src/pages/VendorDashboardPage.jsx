@@ -1,22 +1,241 @@
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { getMyVendorProfile } from '../api/vendor';
-import { getMyListings, deleteListing, updateListing } from '../api/listings';
+import { getMyListings, updateListing } from '../api/listings';
+import { getVendorBookings, updateBookingStatus } from '../api/bookings';
 import { useAuth } from '../context/AuthContext';
 
-function StatCard({ label, value, sub }) {
+const NAV_ITEMS = [
+  { icon: '⊞', label: 'Dashboard' },
+  { icon: '☰', label: 'My Listings' },
+  { icon: '📅', label: 'Bookings' },
+  { icon: '👤', label: 'Profile Settings' },
+];
+
+const STATUS_COLORS = {
+  pending:   { bg: '#fef3c7', color: '#92400e' },
+  confirmed: { bg: '#d1fae5', color: '#065f46' },
+  completed: { bg: '#dbeafe', color: '#1e40af' },
+  cancelled: { bg: '#fee2e2', color: '#991b1b' },
+};
+
+function StatCard({ label, value }) {
   return (
-    <div className="bg-white border border-gray-200 rounded-xl p-5">
-      <p className="text-sm text-gray-500">{label}</p>
-      <p className="text-2xl font-bold text-gray-800 mt-1">{value}</p>
-      {sub && <p className="text-xs text-gray-400 mt-0.5">{sub}</p>}
+    <div className="rounded-2xl p-5" style={{ backgroundColor: '#fef3c7' }}>
+      <p className="text-sm font-medium" style={{ color: '#4b7c78' }}>{label}</p>
+      <p className="text-3xl font-bold mt-2" style={{ color: '#1a4a47' }}>{value}</p>
+    </div>
+  );
+}
+
+function Toggle({ checked, onChange, disabled }) {
+  return (
+    <button
+      onClick={onChange}
+      disabled={disabled}
+      className="relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-50"
+      style={{ backgroundColor: checked ? '#f59e0b' : '#d1d5db' }}
+    >
+      <span
+        className="inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform"
+        style={{ transform: checked ? 'translateX(22px)' : 'translateX(2px)' }}
+      />
+    </button>
+  );
+}
+
+// ── Bookings Tab ──────────────────────────────────────────────────────────────
+function BookingsTab() {
+  const queryClient = useQueryClient();
+  const [filter, setFilter] = useState('all');
+
+  const { data: bookings = [], isLoading } = useQuery({
+    queryKey: ['vendor-bookings', filter],
+    queryFn: () => getVendorBookings(filter === 'all' ? null : filter).then((r) => r.data.bookings),
+  });
+
+  const statusMutation = useMutation({
+    mutationFn: ({ id, status }) => updateBookingStatus(id, status),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['vendor-bookings'] });
+    },
+  });
+
+  const FILTERS = ['all', 'pending', 'confirmed', 'completed', 'cancelled'];
+
+  return (
+    <div className="space-y-4">
+      <h2 className="text-xl font-bold" style={{ color: '#1a4a47' }}>Incoming Bookings</h2>
+
+      {/* Filter pills */}
+      <div className="flex gap-2 flex-wrap">
+        {FILTERS.map((f) => (
+          <button
+            key={f}
+            onClick={() => setFilter(f)}
+            className="px-4 py-1.5 rounded-full text-sm font-medium capitalize transition-all"
+            style={
+              filter === f
+                ? { backgroundColor: '#1a4a47', color: '#fff' }
+                : { backgroundColor: '#fff', color: '#4b7c78', border: '1.5px solid #e8f5f4' }
+            }
+          >
+            {f}
+          </button>
+        ))}
+      </div>
+
+      {isLoading && <p className="text-gray-400 text-sm">Loading…</p>}
+
+      {!isLoading && bookings.length === 0 && (
+        <div className="rounded-2xl p-10 text-center" style={{ backgroundColor: '#fff', border: '2px dashed #e8f5f4' }}>
+          <p className="text-4xl mb-2">📭</p>
+          <p className="font-semibold" style={{ color: '#1a4a47' }}>No bookings yet</p>
+          <p className="text-sm text-gray-400 mt-1">Bookings from customers will appear here</p>
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {bookings.map((b) => {
+          const sc = STATUS_COLORS[b.status] || STATUS_COLORS.pending;
+          const dt = new Date(b.scheduled_at);
+          return (
+            <div
+              key={b.id}
+              className="rounded-2xl p-4"
+              style={{ backgroundColor: '#fff', border: '1.5px solid #e8f5f4' }}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="font-semibold text-sm" style={{ color: '#1a4a47' }}>
+                      {b.listings?.title || 'Listing'}
+                    </span>
+                    <span
+                      className="px-2 py-0.5 rounded-full text-xs font-semibold capitalize"
+                      style={{ backgroundColor: sc.bg, color: sc.color }}
+                    >
+                      {b.status}
+                    </span>
+                  </div>
+                  <p className="text-xs text-gray-500">
+                    👤 {b.profiles?.full_name || 'Customer'} · 📞 {b.profiles?.phone || '—'}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-0.5">
+                    📅 {dt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })} at {dt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                  </p>
+                  {b.address && <p className="text-xs text-gray-500 mt-0.5">📍 {b.address}</p>}
+                  {b.notes && <p className="text-xs text-gray-500 mt-0.5">📝 {b.notes}</p>}
+                  <p className="text-sm font-bold mt-1" style={{ color: '#f59e0b' }}>
+                    ₹{Number(b.amount).toLocaleString('en-IN')}
+                  </p>
+                </div>
+
+                {/* Action buttons */}
+                {b.status === 'pending' && (
+                  <div className="flex flex-col gap-2 shrink-0">
+                    <button
+                      onClick={() => statusMutation.mutate({ id: b.id, status: 'confirmed' })}
+                      disabled={statusMutation.isPending}
+                      className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white disabled:opacity-50"
+                      style={{ backgroundColor: '#1a4a47' }}
+                    >
+                      Confirm
+                    </button>
+                    <button
+                      onClick={() => statusMutation.mutate({ id: b.id, status: 'cancelled' })}
+                      disabled={statusMutation.isPending}
+                      className="px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-50"
+                      style={{ backgroundColor: '#fee2e2', color: '#991b1b' }}
+                    >
+                      Decline
+                    </button>
+                  </div>
+                )}
+                {b.status === 'confirmed' && (
+                  <button
+                    onClick={() => statusMutation.mutate({ id: b.id, status: 'completed' })}
+                    disabled={statusMutation.isPending}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-50 shrink-0"
+                    style={{ backgroundColor: '#dbeafe', color: '#1e40af' }}
+                  >
+                    Mark Done
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Listings Tab ──────────────────────────────────────────────────────────────
+function ListingsTab({ listings }) {
+  const queryClient = useQueryClient();
+
+  const toggleMutation = useMutation({
+    mutationFn: ({ id, is_active }) => updateListing(id, { is_active }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['my-listings'] }),
+  });
+
+  if (listings.length === 0) {
+    return (
+      <div className="rounded-2xl p-10 flex flex-col items-center text-center" style={{ backgroundColor: '#fff', border: '2px dashed #e8f5f4' }}>
+        <p className="text-4xl mb-3">+</p>
+        <p className="font-semibold" style={{ color: '#1a4a47' }}>Add your first listing</p>
+        <p className="text-sm text-gray-400 mt-1 mb-4">Customers will see it on the home page</p>
+        <Link to="/vendor/listings/new" className="px-5 py-2 rounded-xl text-sm font-semibold text-white" style={{ backgroundColor: '#1a4a47' }}>
+          Create Listing
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-bold" style={{ color: '#1a4a47' }}>My Listings</h2>
+        <Link to="/vendor/listings/new" className="px-4 py-2 rounded-xl text-sm font-semibold text-white" style={{ backgroundColor: '#1a4a47' }}>
+          + Add New
+        </Link>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {listings.map((listing) => (
+          <div key={listing.id} className="flex items-center gap-3 rounded-2xl p-4" style={{ backgroundColor: '#fff', border: '1.5px solid #e8f5f4' }}>
+            <div className="w-12 h-12 rounded-xl flex-shrink-0 flex items-center justify-center" style={{ backgroundColor: '#fef3c7' }}>
+              <span className="text-2xl">{listing.categories?.icon || '🍱'}</span>
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold text-sm truncate" style={{ color: '#1a4a47' }}>{listing.title}</p>
+              <p className="text-xs text-gray-400">{listing.categories?.name}</p>
+              <p className="text-xs font-semibold mt-0.5" style={{ color: '#f59e0b' }}>₹{Number(listing.price).toLocaleString('en-IN')} / {listing.unit}</p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <Link to={`/listings/${listing.id}`} className="text-gray-400 hover:text-gray-600 text-sm">✏️</Link>
+              <Toggle
+                checked={listing.is_active}
+                onChange={() => toggleMutation.mutate({ id: listing.id, is_active: !listing.is_active })}
+                disabled={toggleMutation.isPending}
+              />
+            </div>
+          </div>
+        ))}
+        <Link to="/vendor/listings/new" className="flex flex-col items-center justify-center rounded-2xl p-4 transition-all hover:scale-[1.02]" style={{ backgroundColor: '#1a4a47', minHeight: '80px' }}>
+          <span className="text-3xl text-white/80">+</span>
+          <span className="text-white/80 text-sm font-medium mt-1">Add New Listing</span>
+        </Link>
+      </div>
     </div>
   );
 }
 
 export default function VendorDashboardPage() {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const queryClient = useQueryClient();
+  const [activeTab, setActiveTab] = useState('Dashboard');
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['vendor-profile-me'],
@@ -28,153 +247,155 @@ export default function VendorDashboardPage() {
     queryFn: () => getMyListings().then((r) => r.data.listings),
   });
 
-  const deactivateMutation = useMutation({
-    mutationFn: (id) => deleteListing(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['my-listings'] }),
+  const { data: allBookings = [] } = useQuery({
+    queryKey: ['vendor-bookings', 'all'],
+    queryFn: () => getVendorBookings(null).then((r) => r.data.bookings),
   });
 
-  const toggleMutation = useMutation({
-    mutationFn: ({ id, is_active }) => updateListing(id, { is_active }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['my-listings'] }),
-  });
+  const pendingCount = allBookings.filter((b) => b.status === 'pending').length;
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center text-gray-400">
-        Loading your dashboard…
+      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: '#fef9f0' }}>
+        <p className="text-gray-400">Loading your dashboard…</p>
       </div>
     );
   }
 
   if (isError || !data) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: '#fef9f0' }}>
         <div className="text-center">
           <p className="text-gray-500 mb-4">Could not load your vendor profile.</p>
-          <Link to="/vendor/setup" className="text-orange-500 underline">Complete setup</Link>
+          <Link to="/vendor/setup" style={{ color: '#f59e0b' }} className="underline">Complete setup</Link>
         </div>
       </div>
     );
   }
 
-  const categoryLabel = data.category === 'tiffin' ? '🍱 Tiffin / Home Cook' : '🔧 Home Services';
-
   return (
-    <div className="min-h-screen bg-gray-50">
-
-      {/* Top Nav */}
-      <nav className="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
-        <span className="text-xl font-bold text-orange-500">Veranda</span>
-        <div className="flex items-center gap-4">
-          <span className="text-sm text-gray-600 hidden sm:block">{user?.full_name}</span>
+    <div className="min-h-screen flex" style={{ backgroundColor: '#fef9f0' }}>
+      {/* Sidebar */}
+      <aside className="hidden lg:flex flex-col w-56 shrink-0 py-6 px-4 gap-1" style={{ backgroundColor: '#fff', borderRight: '1.5px solid #e8f5f4' }}>
+        <div className="text-xl font-bold mb-6 px-2" style={{ color: '#1a4a47' }}>Veranda</div>
+        {NAV_ITEMS.map((item) => (
           <button
-            onClick={logout}
-            className="text-sm text-gray-500 hover:text-red-500 transition-colors"
+            key={item.label}
+            onClick={() => setActiveTab(item.label)}
+            className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all relative text-left w-full"
+            style={
+              activeTab === item.label
+                ? { backgroundColor: '#1a4a47', color: '#fff' }
+                : { color: '#4b7c78' }
+            }
           >
-            Sign out
+            <span>{item.icon}</span>
+            <span>{item.label}</span>
+            {item.label === 'Bookings' && pendingCount > 0 && (
+              <span className="absolute right-3 w-5 h-5 rounded-full text-xs flex items-center justify-center font-bold" style={{ backgroundColor: '#f59e0b', color: '#1a4a47' }}>
+                {pendingCount}
+              </span>
+            )}
           </button>
+        ))}
+      </aside>
+
+      {/* Mobile bottom nav */}
+      <div className="lg:hidden fixed bottom-0 left-0 right-0 flex border-t z-40" style={{ backgroundColor: '#fff', borderColor: '#e8f5f4' }}>
+        {NAV_ITEMS.map((item) => (
+          <button key={item.label} onClick={() => setActiveTab(item.label)} className="flex-1 flex flex-col items-center py-3 gap-1 relative">
+            <span className="text-lg">{item.icon}</span>
+            <span className="text-[10px]" style={{ color: activeTab === item.label ? '#1a4a47' : '#9ca3af' }}>{item.label}</span>
+            {item.label === 'Bookings' && pendingCount > 0 && (
+              <span className="absolute top-1 right-1/4 w-4 h-4 rounded-full text-[10px] flex items-center justify-center font-bold" style={{ backgroundColor: '#f59e0b', color: '#1a4a47' }}>
+                {pendingCount}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* Main content */}
+      <div className="flex-1 p-6 lg:p-8 space-y-6 max-w-4xl pb-24 lg:pb-8">
+        {/* Header */}
+        <div className="flex items-start justify-between">
+          <div>
+            <h1 className="text-2xl font-bold" style={{ color: '#1a4a47' }}>
+              {activeTab === 'Dashboard' ? `Hello, ${data.business_name}!` : activeTab}
+            </h1>
+            {activeTab === 'Dashboard' && (
+              <p className="text-sm mt-1" style={{ color: '#4b7c78' }}>Welcome to your vendor dashboard on Veranda!</p>
+            )}
+          </div>
         </div>
-      </nav>
 
-      <div className="max-w-3xl mx-auto px-4 py-8 space-y-6">
+        {/* Tab content */}
+        {activeTab === 'Dashboard' && (
+          <div className="space-y-6">
+            <div className="grid grid-cols-2 gap-4">
+              <StatCard label="Total Bookings" value={allBookings.length} />
+              <StatCard label="Pending Requests" value={pendingCount} />
+            </div>
 
-        {/* Business header */}
-        <div className="bg-white border border-gray-200 rounded-2xl p-6 flex items-start justify-between gap-4">
-          <div className="flex-1">
-            <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="text-xl font-bold text-gray-800">{data.business_name}</h1>
-              {data.is_verified && (
-                <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-medium">✓ Verified</span>
-              )}
-              {data.is_featured && (
-                <span className="text-xs bg-orange-100 text-orange-600 px-2 py-0.5 rounded-full font-medium">⭐ Featured</span>
+            {/* Recent pending bookings */}
+            <div className="rounded-2xl p-5" style={{ backgroundColor: '#1a4a47' }}>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-white font-semibold">Recent Booking Requests</h2>
+                <button onClick={() => setActiveTab('Bookings')} className="text-xs font-medium" style={{ color: '#f59e0b' }}>View all →</button>
+              </div>
+              {allBookings.filter((b) => b.status === 'pending').length === 0 ? (
+                <p className="text-white/60 text-sm">No pending requests</p>
+              ) : (
+                <div className="space-y-3">
+                  {allBookings.filter((b) => b.status === 'pending').slice(0, 3).map((b) => (
+                    <div key={b.id} className="flex items-center justify-between">
+                      <div>
+                        <p className="text-white text-sm font-medium">{b.listings?.title || 'Booking'}</p>
+                        <p className="text-white/60 text-xs">{b.profiles?.full_name || 'Customer'} · ₹{Number(b.amount).toLocaleString('en-IN')}</p>
+                      </div>
+                      <button
+                        onClick={() => setActiveTab('Bookings')}
+                        className="px-3 py-1.5 rounded-lg text-xs font-semibold"
+                        style={{ backgroundColor: '#fef3c7', color: '#1a4a47' }}
+                      >
+                        Review
+                      </button>
+                    </div>
+                  ))}
+                </div>
               )}
             </div>
-            <p className="text-sm text-orange-500 font-medium mt-0.5">{categoryLabel}</p>
-            {data.description && <p className="text-sm text-gray-500 mt-2">{data.description}</p>}
-            {data.address && <p className="text-xs text-gray-400 mt-1">📍 {data.address}</p>}
+
+            {/* Listings preview */}
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="font-bold text-lg" style={{ color: '#1a4a47' }}>My Listings</h2>
+                <button onClick={() => setActiveTab('My Listings')} className="text-sm" style={{ color: '#f59e0b' }}>Manage →</button>
+              </div>
+              {listings.length === 0 ? (
+                <Link to="/vendor/listings/new" className="flex items-center gap-3 rounded-2xl p-4" style={{ backgroundColor: '#fff', border: '2px dashed #e8f5f4' }}>
+                  <span className="text-2xl">+</span>
+                  <span className="text-sm font-medium" style={{ color: '#1a4a47' }}>Add your first listing</span>
+                </Link>
+              ) : (
+                <p className="text-sm" style={{ color: '#4b7c78' }}>{listings.length} listing{listings.length !== 1 ? 's' : ''} · {listings.filter((l) => l.is_active).length} active</p>
+              )}
+            </div>
           </div>
-          <Link
-            to="/vendor/setup/edit"
-            className="text-sm text-orange-500 hover:underline whitespace-nowrap"
-          >
-            Edit profile
-          </Link>
-        </div>
+        )}
 
-        {/* Stats */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-          <StatCard label="Rating" value={data.rating > 0 ? `${data.rating.toFixed(1)} ★` : '—'} sub={`${data.total_reviews} reviews`} />
-          <StatCard label="Status" value={data.is_verified ? 'Active' : 'Pending'} sub="Verification status" />
-          <StatCard label="Listings" value={listings.length} sub={listings.length === 0 ? 'Add your first' : 'Total published'} />
-        </div>
-
-        {/* Listings section */}
-        <div>
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="font-semibold text-gray-700">Your Listings</h2>
-            <Link
-              to="/vendor/listings/new"
-              className="text-sm bg-orange-500 hover:bg-orange-600 text-white px-4 py-1.5 rounded-lg transition-colors"
-            >
-              + Add Listing
+        {activeTab === 'Bookings' && <BookingsTab />}
+        {activeTab === 'My Listings' && <ListingsTab listings={listings} />}
+        {activeTab === 'Profile Settings' && (
+          <div className="rounded-2xl p-8 text-center" style={{ backgroundColor: '#fff', border: '1.5px solid #e8f5f4' }}>
+            <p className="text-4xl mb-3">👤</p>
+            <p className="font-semibold mb-2" style={{ color: '#1a4a47' }}>Profile Settings</p>
+            <p className="text-sm text-gray-400 mb-4">Update your business details and contact info</p>
+            <Link to="/vendor/setup" className="px-5 py-2 rounded-xl text-sm font-semibold text-white" style={{ backgroundColor: '#1a4a47' }}>
+              Edit Profile
             </Link>
           </div>
-
-          {listings.length === 0 ? (
-            <div className="bg-orange-50 border border-orange-200 rounded-2xl p-6 text-center">
-              <p className="text-gray-700 font-medium mb-1">No listings yet</p>
-              <p className="text-sm text-gray-500 mb-4">Add your first listing so customers can find and book you.</p>
-              <Link
-                to="/vendor/listings/new"
-                className="inline-block bg-orange-500 hover:bg-orange-600 text-white font-semibold px-6 py-2.5 rounded-xl transition-colors"
-              >
-                + Add Listing
-              </Link>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {listings.map((listing) => (
-                <div
-                  key={listing.id}
-                  className={`bg-white border rounded-xl p-4 flex items-start gap-3 ${
-                    listing.is_active ? 'border-gray-200' : 'border-gray-100 opacity-60'
-                  }`}
-                >
-                  <span className="text-2xl mt-0.5">{listing.categories?.icon}</span>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <p className="font-medium text-gray-800 text-sm">{listing.title}</p>
-                      {!listing.is_active && (
-                        <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">Inactive</span>
-                      )}
-                    </div>
-                    <p className="text-xs text-gray-400 mt-0.5">{listing.categories?.name}</p>
-                    <p className="text-orange-500 font-semibold text-sm mt-1">
-                      ₹{parseFloat(listing.price).toFixed(0)} <span className="text-gray-400 font-normal">{listing.unit}</span>
-                    </p>
-                  </div>
-                  <div className="flex flex-col items-end gap-2 shrink-0">
-                    <Link
-                      to={`/listings/${listing.id}`}
-                      className="text-xs text-blue-500 hover:underline"
-                    >
-                      View
-                    </Link>
-                    <button
-                      onClick={() => toggleMutation.mutate({ id: listing.id, is_active: !listing.is_active })}
-                      disabled={toggleMutation.isPending}
-                      className="text-xs text-gray-500 hover:text-orange-500 transition-colors"
-                    >
-                      {listing.is_active ? 'Deactivate' : 'Activate'}
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
+        )}
       </div>
     </div>
   );

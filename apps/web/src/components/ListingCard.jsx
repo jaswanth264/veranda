@@ -1,54 +1,90 @@
 import { Link } from 'react-router-dom';
 
+// Emoji per category — no external image dependency
+const CAT_EMOJI = {
+  tiffin:      '🍱',
+  homecook:    '👩‍🍳',
+  plumber:     '🔧',
+  electrician: '⚡',
+  cleaning:    '🧹',
+  carpenter:   '🪚',
+  painter:     '🎨',
+  ac:          '❄️',
+};
+
 export default function ListingCard({ listing }) {
   const vendor   = listing.vendor_profiles;
   const category = listing.categories;
   const price    = parseFloat(listing.price);
+  const catEmoji = CAT_EMOJI[category?.slug] || '🏠';
 
   return (
     <Link
       to={`/listings/${listing.id}`}
-      className="group bg-white rounded-2xl border border-gray-200 hover:border-orange-300 hover:shadow-md transition-all overflow-hidden flex flex-col"
+      className="group bg-white rounded-2xl overflow-hidden flex flex-col transition-all hover:scale-[1.02]"
+      style={{ boxShadow: '0 2px 12px rgba(0,0,0,0.08)', border: '1.5px solid #f0ece4' }}
     >
-      {/* Category color band */}
-      <div className={`h-1.5 w-full ${category?.type === 'tiffin' ? 'bg-orange-400' : 'bg-blue-400'}`} />
+      {/* Illustrated image area */}
+      <div
+        className="relative flex items-center justify-center overflow-hidden"
+        style={{ height: '130px', backgroundColor: '#fef3c7' }}
+      >
+        {/* Heart icon */}
+        <button
+          onClick={(e) => e.preventDefault()}
+          className="absolute top-2 right-2 w-7 h-7 rounded-full bg-white/80 flex items-center justify-center text-gray-400 hover:text-red-400 transition-colors text-sm"
+        >
+          ♡
+        </button>
+        <span className="text-6xl select-none">{catEmoji}</span>
+      </div>
 
-      <div className="p-4 flex flex-col gap-3 flex-1">
-        {/* Category badge */}
-        <div className="flex items-center gap-1.5">
-          <span className="text-base">{category?.icon}</span>
-          <span className="text-xs text-gray-400 font-medium">{category?.name}</span>
-          {vendor?.is_verified && (
-            <span className="ml-auto text-xs bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full">✓</span>
+      <div className="p-4 flex flex-col flex-1 gap-1">
+        {/* Vendor name */}
+        <p className="font-semibold text-sm leading-snug" style={{ color: '#1a4a47' }}>
+          {vendor?.business_name || listing.title}
+        </p>
+
+        {/* Listing title */}
+        <p className="text-xs text-gray-500 line-clamp-1">{listing.title}</p>
+
+        {/* Rating */}
+        <div className="flex items-center gap-1 mt-0.5">
+          {vendor?.rating > 0 ? (
+            <>
+              <span style={{ color: '#f59e0b' }}>★</span>
+              <span className="text-xs font-medium text-gray-600">{vendor.rating.toFixed(1)}</span>
+            </>
+          ) : (
+            <span className="text-xs text-gray-400">New</span>
           )}
         </div>
 
-        {/* Vendor name */}
-        <div>
-          <p className="font-semibold text-gray-800 text-sm leading-snug group-hover:text-orange-600 transition-colors">
-            {vendor?.business_name}
-          </p>
-          <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{listing.title}</p>
-        </div>
-
-        {/* Footer row */}
-        <div className="flex items-end justify-between mt-auto pt-2 border-t border-gray-100">
+        {/* Price + location */}
+        <div className="flex items-center justify-between mt-1">
           <div>
-            <span className="text-lg font-bold text-orange-500">₹{price % 1 === 0 ? price.toFixed(0) : price.toFixed(2)}</span>
+            <span className="font-bold text-base" style={{ color: '#1a4a47' }}>
+              ₹{price % 1 === 0 ? price.toFixed(0) : price.toFixed(2)}
+            </span>
             <span className="text-xs text-gray-400 ml-1">{listing.unit}</span>
           </div>
-          <div className="text-right">
-            {vendor?.rating > 0 ? (
-              <p className="text-xs text-gray-500">⭐ {vendor.rating.toFixed(1)}</p>
-            ) : (
-              <p className="text-xs text-gray-400">New</p>
-            )}
-            {vendor?.address && (
-              <p className="text-xs text-gray-400 truncate max-w-[100px]">📍 {vendor.address.split(',')[0]}</p>
-            )}
-          </div>
+          {vendor?.address && (
+            <p className="text-xs text-gray-400 truncate max-w-[90px]">
+              📍 {vendor.address.split(',')[0]}
+            </p>
+          )}
         </div>
+
+        {/* Book Now button */}
+        <button
+          onClick={(e) => e.preventDefault()}
+          className="mt-3 w-full py-2 rounded-xl text-sm font-semibold text-white transition-all group-hover:opacity-90"
+          style={{ backgroundColor: '#1a4a47' }}
+        >
+          Book Now
+        </button>
       </div>
     </Link>
   );
 }
+

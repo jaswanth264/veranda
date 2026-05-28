@@ -62,7 +62,7 @@ router.post('/', requireAuth, async (req, res) => {
       .select('*, categories(id, name, icon, type)')
       .single();
 
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) { console.error(`[${__filename}]`, error?.message || error); return res.status(500).json({ error: 'Internal server error' }); }
 
     return res.status(201).json({ listing });
   } catch (err) {
@@ -85,7 +85,7 @@ router.get('/mine', requireAuth, async (req, res) => {
       .eq('vendor_id', vendor.id)
       .order('created_at', { ascending: false });
 
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) { console.error(`[${__filename}]`, error?.message || error); return res.status(500).json({ error: 'Internal server error' }); }
 
     return res.json({ listings: data });
   } catch (err) {
@@ -122,7 +122,7 @@ router.get('/', async (req, res) => {
     }
 
     const { data, error, count } = await query;
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) { console.error(`[${__filename}]`, error?.message || error); return res.status(500).json({ error: 'Internal server error' }); }
 
     return res.json({
       listings: data,
@@ -156,7 +156,7 @@ router.get('/category/:type', async (req, res) => {
       .order('created_at', { ascending: false })
       .limit(20);
 
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) { console.error(`[${__filename}]`, error?.message || error); return res.status(500).json({ error: 'Internal server error' }); }
 
     return res.json({ listings: data });
   } catch (err) {
@@ -235,7 +235,7 @@ router.put('/:id', requireAuth, async (req, res) => {
       .select('*, categories(id, name, icon, type)')
       .single();
 
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) { console.error(`[${__filename}]`, error?.message || error); return res.status(500).json({ error: 'Internal server error' }); }
 
     return res.json({ listing: data });
   } catch (err) {

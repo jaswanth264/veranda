@@ -8,6 +8,7 @@ import VendorDashboardPage from './pages/VendorDashboardPage';
 import CreateListingPage from './pages/CreateListingPage';
 import ListingDetailPage from './pages/ListingDetailPage';
 import HomePage from './pages/HomePage';
+import CustomerDashboardPage from './pages/CustomerDashboardPage';
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth();
@@ -37,6 +38,7 @@ function AppRoutes() {
       <Route path='/login' element={<GuestRoute><LoginPage /></GuestRoute>} />
       <Route path='/register' element={<GuestRoute><RegisterPage /></GuestRoute>} />
       <Route path='/dashboard' element={<PrivateRoute><DashboardPage /></PrivateRoute>} />
+      <Route path='/my-bookings' element={<PrivateRoute><CustomerDashboardPage /></PrivateRoute>} />
       <Route path='/vendor/setup' element={<VendorRoute><VendorSetupPage /></VendorRoute>} />
       <Route path='/vendor/dashboard' element={<VendorRoute><VendorDashboardPage /></VendorRoute>} />
       <Route path='/vendor/listings/new' element={<VendorRoute><CreateListingPage /></VendorRoute>} />

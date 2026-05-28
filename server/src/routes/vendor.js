@@ -59,7 +59,7 @@ router.post('/profile', requireAuth, async (req, res) => {
       .select()
       .single();
 
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) { console.error(`[${__filename}]`, error?.message || error); return res.status(500).json({ error: 'Internal server error' }); }
 
     // Audit log (non-blocking)
     const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
@@ -133,7 +133,7 @@ router.put('/profile', requireAuth, async (req, res) => {
       .select()
       .single();
 
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) { console.error(`[${__filename}]`, error?.message || error); return res.status(500).json({ error: 'Internal server error' }); }
     if (!data) return res.status(404).json({ error: 'Vendor profile not found' });
 
     return res.json({ vendor_profile: data });

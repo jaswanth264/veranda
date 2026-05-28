@@ -15,6 +15,8 @@ export default function DashboardPage() {
       const hasProfile = vp &&
         (Array.isArray(vp) ? vp.length > 0 : Object.keys(vp).length > 0);
       navigate(hasProfile ? '/vendor/dashboard' : '/vendor/setup', { replace: true });
+    } else {
+      navigate('/my-bookings', { replace: true });
     }
   }, [user, navigate]);
 
