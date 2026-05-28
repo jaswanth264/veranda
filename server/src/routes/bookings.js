@@ -1,8 +1,60 @@
 const express = require('express');
 const router = express.Router();
 const { randomInt } = require('crypto');
+const https = require('https');
+const http = require('http');
+const { PNG } = require('pngjs');
+const jsQR = require('jsqr');
+const Razorpay = require('razorpay');
+
+/**
+ * Download an image from a URL (follows up to 5 redirects) and decode the QR code inside it.
+ * Returns the raw QR string (e.g. "upi://pay?pa=...@razorpay&...") or null on failure.
+ */
+async function downloadBuffer(url, redirectsLeft = 5) {
+  return new Promise((resolve, reject) => {
+    const lib = url.startsWith('https') ? https : http;
+    lib.get(url, { headers: { 'User-Agent': 'Veranda/1.0' } }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && redirectsLeft > 0) {
+        res.destroy();
+        return downloadBuffer(res.headers.location, redirectsLeft - 1).then(resolve).catch(reject);
+      }
+      const chunks = [];
+      res.on('data', (c) => chunks.push(c));
+      res.on('end', () => resolve(Buffer.concat(chunks)));
+      res.on('error', reject);
+    }).on('error', reject);
+  });
+}
+
+async function decodeQrImageUrl(imageUrl) {
+  try {
+    const buffer = await downloadBuffer(imageUrl);
+    const png = PNG.sync.read(buffer);
+    const code = jsQR(new Uint8ClampedArray(png.data.buffer, png.data.byteOffset, png.data.byteLength), png.width, png.height);
+    if (code?.data) {
+      console.log('[bookings] QR decoded:', code.data.substring(0, 60) + '...');
+      return code.data;
+    }
+    console.warn('[bookings] QR decoded but no data found');
+    return null;
+  } catch (e) {
+    console.warn('[bookings] QR image decode failed:', e.message);
+    return null;
+  }
+}
 const { supabaseAdmin } = require('../supabase');
 const { requireAuth } = require('../middleware/auth');
+
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET,
+});
+
+// In-memory store: bookingId → { qrId, baselineAmount }
+// baselineAmount = payments_amount_received at the time QR was assigned to this booking
+// Lets us detect NEW payments on a multi_use test QR
+const codQrCodes = new Map();
 
 function serverError(res, label, err) {
   console.error(`[bookings] ${label}:`, err?.message || err);
@@ -368,7 +420,7 @@ router.post('/:id/verify-otp', requireAuth, async (req, res) => {
 
   const { data: booking, error: fetchErr } = await supabaseAdmin
     .from('bookings')
-    .select('id, status, completion_otp, otp_expires_at')
+    .select('id, status, completion_otp, otp_expires_at, payment_method, payment_status')
     .eq('id', req.params.id)
     .eq('vendor_id', vp.id)
     .single();
@@ -378,6 +430,11 @@ router.post('/:id/verify-otp', requireAuth, async (req, res) => {
   // Allow OTP verify from confirmed (→ in_progress) or in_progress (→ completed)
   if (booking.status !== 'confirmed' && booking.status !== 'in_progress') {
     return res.status(400).json({ error: 'OTP verification is not applicable for this booking state.' });
+  }
+
+  // COD bookings complete via /confirm-cod-payment, not OTP
+  if (booking.status === 'in_progress' && booking.payment_method === 'cod') {
+    return res.status(400).json({ error: 'COD bookings are completed via the "Collect Payment" flow, not OTP.' });
   }
   if (!booking.completion_otp) {
     const hint = booking.status === 'confirmed' ? "Click \"I've Arrived\" first." : 'Click "Mark Done" first.';
@@ -403,6 +460,181 @@ router.post('/:id/verify-otp', requireAuth, async (req, res) => {
 
   if (error) return serverError(res, 'verify-otp', error);
   res.json({ booking: updated });
+});
+
+// ── POST /api/bookings/:id/confirm-cod-payment ─ vendor collects cash or UPI ─
+// Called from vendor's CodPaymentModal after showing QR or receiving cash.
+// Marks booking as paid + completed. No OTP needed for COD.
+router.post('/:id/confirm-cod-payment', requireAuth, async (req, res) => {
+  const { collected_via } = req.body; // 'cash' | 'upi'
+  if (!collected_via || !['cash', 'upi'].includes(collected_via)) {
+    return res.status(400).json({ error: 'collected_via must be cash or upi' });
+  }
+
+  const { profileId, error: profileErr } = await resolveProfileId(req.user.id, {
+    ...req.user.user_metadata,
+    email: req.user.email,
+  });
+  if (profileErr) return serverError(res, 'resolve-profile-cod-confirm', profileErr);
+
+  const { data: vp } = await supabaseAdmin
+    .from('vendor_profiles')
+    .select('id')
+    .eq('profile_id', profileId)
+    .single();
+  if (!vp) return res.status(403).json({ error: 'Not a vendor' });
+
+  const { data: booking, error: fetchErr } = await supabaseAdmin
+    .from('bookings')
+    .select('id, status, payment_method, payment_status')
+    .eq('id', req.params.id)
+    .eq('vendor_id', vp.id)
+    .single();
+
+  if (fetchErr || !booking) return res.status(404).json({ error: 'Booking not found' });
+  if (booking.payment_method !== 'cod') {
+    return res.status(400).json({ error: 'This booking is not a COD booking.' });
+  }
+  if (booking.status !== 'in_progress') {
+    return res.status(400).json({ error: 'Booking must be in_progress to collect payment.' });
+  }
+  if (booking.payment_status === 'paid') {
+    return res.status(400).json({ error: 'Payment already confirmed for this booking.' });
+  }
+
+  const { data: updated, error } = await supabaseAdmin
+    .from('bookings')
+    .update({
+      status: 'completed',
+      payment_status: 'paid',
+      completion_otp: null,
+      otp_expires_at: null,
+    })
+    .eq('id', req.params.id)
+    .select()
+    .single();
+
+  if (error) return serverError(res, 'confirm-cod-payment', error);
+  console.log(`[bookings] COD payment confirmed (${collected_via}) for booking ${req.params.id}`);
+  res.json({ booking: updated, message: `Payment collected via ${collected_via}. Booking completed.` });
+});
+
+// ── POST /api/bookings/:id/create-cod-payment-link ────────────────────────
+// Creates a Razorpay UPI QR Code for the booking amount.
+// Razorpay assigns a unique VPA (e.g. pay.veranda.qr_xxx@razorpay) to this QR.
+// Customer scans → native GPay/PhonePe opens immediately → enters PIN → pays.
+// No browser redirect. Auto-detected via polling /check-cod-payment.
+router.post('/:id/create-cod-payment-link', requireAuth, async (req, res) => {
+  const { profileId, error: profileErr } = await resolveProfileId(req.user.id, {
+    ...req.user.user_metadata,
+    email: req.user.email,
+  });
+  if (profileErr) return serverError(res, 'resolve-profile-cod-qr', profileErr);
+
+  const { data: vp } = await supabaseAdmin
+    .from('vendor_profiles')
+    .select('id')
+    .eq('profile_id', profileId)
+    .single();
+  if (!vp) return res.status(403).json({ error: 'Not a vendor' });
+
+  const { data: booking, error: fetchErr } = await supabaseAdmin
+    .from('bookings')
+    .select('id, amount, status, payment_method, payment_status, listings(title)')
+    .eq('id', req.params.id)
+    .eq('vendor_id', vp.id)
+    .single();
+
+  if (fetchErr || !booking) return res.status(404).json({ error: 'Booking not found' });
+  if (booking.payment_method !== 'cod') return res.status(400).json({ error: 'Not a COD booking' });
+  if (booking.status !== 'in_progress') return res.status(400).json({ error: 'Booking must be in_progress' });
+  if (booking.payment_status === 'paid') return res.status(400).json({ error: 'Already paid' });
+
+  // ── Dev mode: reuse a pre-created test QR from the dashboard ─────────────
+  // Set RAZORPAY_TEST_QR_ID in server/.env to skip creating a new QR each time.
+  // In production (NODE_ENV=production) this is ignored.
+  if (process.env.NODE_ENV !== 'production' && process.env.RAZORPAY_TEST_QR_ID) {
+    try {
+      const testQr = await razorpay.qrCode.fetch(process.env.RAZORPAY_TEST_QR_ID);
+      // Record the current total so we can detect NEW payments for this booking
+      const baseline = testQr.payments_amount_received || 0;
+      codQrCodes.set(req.params.id, { qrId: testQr.id, baselineAmount: baseline });
+      console.log(`[bookings] Using test QR ${testQr.id} (baseline ₹${baseline / 100}) for booking ${req.params.id}`);
+      const upiString = await decodeQrImageUrl(testQr.image_url);
+      return res.json({ qr_id: testQr.id, image_url: testQr.image_url, upi_string: upiString });
+    } catch (err) {
+      console.warn('[bookings] Test QR fetch failed, falling through to create new:', err?.error?.description);
+    }
+  }
+
+  // Reuse existing QR if still active
+  const existingQrId = codQrCodes.get(req.params.id);
+  if (existingQrId) {
+    try {
+      const existing = await razorpay.qrCode.fetch(existingQrId);
+      if (existing.status === 'active') {
+        return res.json({ qr_id: existing.id, image_url: existing.image_url });
+      }
+    } catch (_) { /* QR gone, create new */ }
+  }
+
+  let qr;
+  try {
+    // Razorpay UPI QR Code — assigns a unique VPA per booking.
+    // Customer scans → GPay/PhonePe opens natively (no browser redirect) → PIN entry.
+    qr = await razorpay.qrCode.create({
+      type: 'upi_qr',
+      name: 'Veranda',
+      usage: 'single_use',           // auto-closes after one payment
+      fixed_amount: true,
+      payment_amount: Math.round(Number(booking.amount) * 100), // paise
+      description: `Veranda: ${booking.listings?.title || 'Service'}`,
+      close_by: Math.floor(Date.now() / 1000) + 3600, // expires in 1 hour
+    });
+  } catch (err) {
+    return serverError(res, 'razorpay-create-qr', err);
+  }
+
+  codQrCodes.set(req.params.id, { qrId: qr.id, baselineAmount: 0 });
+  console.log(`[bookings] Created UPI QR ${qr.id} for booking ${req.params.id}`);
+  const upiStringProd = await decodeQrImageUrl(qr.image_url);
+  res.json({ qr_id: qr.id, image_url: qr.image_url, upi_string: upiStringProd });
+});
+
+// ── GET /api/bookings/:id/check-cod-payment ────────────────────────────────
+// Polled by vendor's CodPaymentModal every 3s.
+// Checks if the Razorpay UPI QR has received payment; if so → auto-completes booking.
+router.get('/:id/check-cod-payment', requireAuth, async (req, res) => {
+  const entry = codQrCodes.get(req.params.id);
+  if (!entry) return res.json({ completed: false });
+
+  const { qrId, baselineAmount } = entry;
+
+  let qr;
+  try {
+    qr = await razorpay.qrCode.fetch(qrId);
+  } catch (err) {
+    return serverError(res, 'razorpay-fetch-qr', err);
+  }
+
+  // For single_use QRs: paid = payments_amount_received > 0
+  // For multi_use test QRs: paid = current total > baseline (new payment arrived)
+  const paid = (qr.payments_amount_received || 0) > baselineAmount;
+
+  if (paid) {
+    const { error } = await supabaseAdmin
+      .from('bookings')
+      .update({ status: 'completed', payment_status: 'paid', completion_otp: null, otp_expires_at: null })
+      .eq('id', req.params.id);
+
+    if (!error) {
+      codQrCodes.delete(req.params.id);
+      console.log(`[bookings] Auto-completed booking ${req.params.id} via UPI QR payment`);
+    }
+    return res.json({ completed: true });
+  }
+
+  res.json({ completed: false, qr_status: qr.status });
 });
 
 module.exports = router;

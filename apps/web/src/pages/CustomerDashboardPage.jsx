@@ -56,6 +56,13 @@ export default function CustomerDashboardPage() {
   const { data, isLoading } = useQuery({
     queryKey: ['my-bookings', activeTab],
     queryFn: () => getMyBookings(activeTab || undefined).then((r) => r.data.bookings),
+    // Poll every 6s when a COD booking is in_progress and paid (waiting for vendor to send completion OTP)
+    // or when in_progress + unpaid (so OTP appears right after vendor clicks Mark Done)
+    refetchInterval: (query) => {
+      const bkgs = query.state.data ?? [];
+      const needsPoll = bkgs.some((b) => b.status === 'in_progress' && b.payment_method === 'cod');
+      return needsPoll ? 6000 : false;
+    },
   });
 
   // Grab the profileId from the first booking (it's our profiles.id)
@@ -227,11 +234,17 @@ export default function CustomerDashboardPage() {
                       {/* COD — pay via Razorpay at doorstep (platform QR, not vendor UPI) */}
                       {b.payment_method === 'cod' && b.payment_status !== 'paid' && !doorstepPaid[b.id] && (
                         <>
+                          <div className="flex items-center gap-2 px-3 py-2 rounded-xl" style={{ backgroundColor: '#fff7ed', border: '1.5px solid #fb923c' }}>
+                            <span className="animate-pulse">💳</span>
+                            <p className="text-xs font-semibold" style={{ color: '#c2410c' }}>
+                              Payment due — please pay now to complete the service.
+                            </p>
+                          </div>
                           <button
                             onClick={() => handleDoorstepPay(b)}
                             disabled={doorstepPaying === b.id}
-                            className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl text-sm font-semibold transition disabled:opacity-60"
-                            style={{ backgroundColor: '#1a4a47', color: '#fff' }}
+                            className="flex items-center justify-center gap-2 w-full py-3 rounded-xl text-sm font-bold transition disabled:opacity-60 shadow-lg"
+                            style={{ backgroundColor: '#f59e0b', color: '#fff', boxShadow: '0 0 0 4px rgba(245,158,11,0.25)' }}
                           >
                             <span>📱</span>
                             {doorstepPaying === b.id ? 'Opening payment...' : `Pay ₹${Number(b.amount).toLocaleString('en-IN')} via UPI / Card`}
@@ -241,8 +254,15 @@ export default function CustomerDashboardPage() {
                           )}
                         </>
                       )}
-                      {/* Already paid at doorstep */}
-                      {(b.payment_status === 'paid' || doorstepPaid[b.id]) && (
+                      {/* Already paid at doorstep — show completion OTP so customer can give to vendor */}
+                      {(b.payment_status === 'paid' || doorstepPaid[b.id]) && b.completion_otp && (
+                        <div className="flex flex-col gap-1 p-3 rounded-xl" style={{ backgroundColor: '#f0fdf4', border: '1.5px solid #6ee7b7' }}>
+                          <p className="text-xs font-semibold" style={{ color: '#065f46' }}>✅ Payment received! Give this code to the vendor:</p>
+                          <p className="text-3xl font-mono font-black tracking-widest text-center py-1" style={{ color: '#1a4a47' }}>{b.completion_otp}</p>
+                          <p className="text-xs text-center" style={{ color: '#6b7280' }}>Read this 6-digit code to the vendor to complete the service.</p>
+                        </div>
+                      )}
+                      {(b.payment_status === 'paid' || doorstepPaid[b.id]) && !b.completion_otp && (
                         <div className="flex items-center gap-2 px-3 py-2 rounded-xl" style={{ backgroundColor: '#d1fae5', border: '1px solid #6ee7b7' }}>
                           <span>✅</span>
                           <p className="text-xs font-semibold" style={{ color: '#065f46' }}>Payment of ₹{Number(b.amount).toLocaleString('en-IN')} received.</p>

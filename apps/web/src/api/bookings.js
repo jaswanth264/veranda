@@ -9,3 +9,6 @@ export const confirmCompletion    = (id)             => client.post(`/bookings/$
 export const sendArrivalOtp       = (id)             => client.post(`/bookings/${id}/send-arrival-otp`);
 export const sendCompletionOtp    = (id)             => client.post(`/bookings/${id}/send-completion-otp`);
 export const verifyCompletionOtp  = (id, otp)        => client.post(`/bookings/${id}/verify-otp`, { otp });
+export const confirmCodPayment    = (id, collected_via) => client.post(`/bookings/${id}/confirm-cod-payment`, { collected_via });
+export const createCodPaymentLink = (id)                => client.post(`/bookings/${id}/create-cod-payment-link`);
+export const checkCodPayment      = (id)                => client.get(`/bookings/${id}/check-cod-payment`);

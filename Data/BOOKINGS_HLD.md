@@ -137,26 +137,49 @@ Choose pay_method ✓           status = pending
                                                 ◄─────────── Click "I've Arrived"
                               POST /send-arrival-otp
                               Generate 6-digit OTP
-                              Save to bookings.completion_otp
-SMS: "OTP: 482917" ◄────────  [Production: send SMS]
-                              [Dev: return in response]
+SMS: "OTP: 482917" ◄────────  [Production: send SMS to customer]
+                              [Dev: shown in vendor dashboard]
 Read OTP to vendor ──────────────────────────────────────► Enter OTP
-                              POST /verify-otp
-                              status = in_progress ──────────► See "🔧 In Progress"
-                                                               💵 [COD] "Collect ₹XXX
-                                                                 — cash or UPI QR"
-[COD] "📱 Pay via UPI Scan" ←── CustomerDashboard shows UPI button
-Opens QR modal ────────────
-Scans vendor UPI QR ───────────────────────────────────── Vendor receives UPI ✅
+                              POST /verify-otp (confirmed→in_progress)
+                              status = in_progress
 
-                                                ◄─────────── Click "Mark Done"
+── PAYMENT PHASE (COD only) ─────────────────────────────────────────────────
+                                                ◄─────────── Click "✅ Mark Done"
                               POST /send-completion-otp
                               Generate NEW 6-digit OTP
-SMS: "OTP: 731042" ◄────────  [Production: send SMS]
+                              Saved in bookings.completion_otp
+                                                              ⏳ "Ask customer to
+                                                              pay → they'll share
+                                                              the 6-digit code"
+[COD] "Pay ₹XXX to    ◄──── Customer dashboard polls (6s)
+ get your code" (CTA)         to detect new completion_otp
+
+Customer pays via ─────────► POST /payments/create-order
+Razorpay (UPI/Card)           POST /payments/verify
+                              payment_status = paid
+
+"Your code: 731042    ◄──── Booking re-fetched, completion_otp
+ — read to vendor"            visible in app only after payment
+ (green box)
+
+Read code to vendor ─────────────────────────────────────► Enter OTP
+                              POST /verify-otp (in_progress→completed)
+                              ⛔ 402 if payment_status ≠ 'paid' (server guard)
+                              status = completed ──────────► ✅ Booking Done
+
+── PAYMENT PHASE (Online — already paid at booking) ─────────────────────────
+                                                ◄─────────── Click "✅ Mark Done"
+                              POST /send-completion-otp
+SMS: "OTP: 731042" ◄────────  [Production: send SMS to customer]
+                              [Dev: shown in vendor dashboard]
 Read OTP to vendor ──────────────────────────────────────► Enter OTP
-                              POST /verify-otp
-                              status = completed ◄──────────► ✅ Booking Complete
+                              status = completed ──────────► ✅ Booking Done
 ```
+
+> **Why OTP-after-payment?** The completion OTP is the customer's "receipt". They pay → unlock the code → give to vendor. This means:
+> - Vendor can't fake completion (no code without customer)
+> - Customer can't refuse payment after service (code unlocked only after paying)
+> - Both parties are protected
 
 ---
 
@@ -264,22 +287,30 @@ Implementation: `useBookingRealtime(profileId)` hook — subscribes to `postgres
 ```
 Status: pending     → [Accept] [Decline]
 Status: confirmed   → [📍 I've Arrived]
-                       ↓ (Arrival OTP sent to customer SMS)
+                       ↓ (Arrival OTP sent to customer SMS / dev console)
                       [🔧 Dev OTP: 482917]
                       [Enter OTP ______] [Start ✓]
 Status: in_progress → [✅ Mark Done]
-                       ↓ (Completion OTP sent to customer SMS)
-                      [🔵 Completion OTP: 731042]
+                       ↓ (Completion OTP sent to customer SMS / dev console)
+                      [🔵 Dev OTP: 731042]
                       [Enter OTP ______] [Done ✓]
 Status: completed   → (no actions)
 ```
 
 ### Services Booking (COD Payment)
 ```
-Status: in_progress → 💵 "Collect ₹XXX — cash or UPI QR"
-                         "Customer can scan your UPI QR from their app to pay directly."
-Status: completed   → 💵 "Collect ₹XXX from customer"
+Status: in_progress → [✅ Mark Done]
+                       ↓ (Completion OTP generated — stored in DB but NOT shown to vendor)
+                      ⏳ "Ask customer to pay on Veranda app — they'll share the code"
+                      [Enter OTP ______] [Done ✓]
+                         ↑ customer pays → unlocks 6-digit code → reads to vendor
+                         ⛔ Server: 402 if payment_status ≠ 'paid'
+Status: completed   → (no actions)
 ```
+
+> **Customer side (COD in_progress):**
+> - Before payment: amber "📱 Pay ₹XXX via UPI / Card" pulsing button  
+> - After payment: green box "Your completion code: **731042** — read to vendor"
 
 ### Tiffin Booking
 ```

@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom';
 import { getMyVendorProfile } from '../api/vendor';
 import { getMyListings, updateListing } from '../api/listings';
 import { getVendorBookings, updateBookingStatus, sendArrivalOtp, sendCompletionOtp, verifyCompletionOtp } from '../api/bookings';
+import CodPaymentModal from '../components/CodPaymentModal';
 import { useAuth } from '../context/AuthContext';
 
 const NAV_ITEMS = [
@@ -63,10 +64,19 @@ function BookingsTab() {
   const [devOtps, setDevOtps] = useState({});
   const [doneIds, setDoneIds] = useState(new Set());       // in_progress bookings where "Mark Done" clicked
   const [completionDevOtps, setCompletionDevOtps] = useState({}); // dev OTPs for completion step
+  const [codPaymentBooking, setCodPaymentBooking] = useState(null); // booking open in CodPaymentModal
 
   const { data: bookings = [], isLoading } = useQuery({
     queryKey: ['vendor-bookings', filter],
     queryFn: () => getVendorBookings(filter === 'all' ? null : filter).then((r) => r.data.bookings),
+    // Poll every 8s when there are COD bookings in_progress waiting for payment
+    refetchInterval: (query) => {
+      const bkgs = query.state.data ?? [];
+      const hasCodPending = bkgs.some(
+        (b) => b.status === 'in_progress' && b.payment_method === 'cod' && b.payment_status !== 'paid'
+      );
+      return hasCodPending ? 8000 : false;
+    },
   });
 
   const statusMutation = useMutation({
@@ -172,6 +182,14 @@ function BookingsTab() {
         </div>
       )}
 
+      {/* CodPaymentModal — Rapido-style: vendor shows QR / collects cash */}
+      {codPaymentBooking && (
+        <CodPaymentModal
+          booking={codPaymentBooking}
+          onClose={() => setCodPaymentBooking(null)}
+        />
+      )}
+
       <div className="space-y-3">
         {bookings.map((b) => {
           const sc = STATUS_COLORS[b.status] || STATUS_COLORS.pending;
@@ -207,20 +225,13 @@ function BookingsTab() {
                   )}
                   {b.notes && <p className="text-xs text-gray-500 mt-0.5">📝 {b.notes}</p>}
                   <p className="text-sm font-bold mt-1" style={{ color: '#f59e0b' }}>₹{Number(b.amount).toLocaleString('en-IN')}</p>
-                  {/* COD reminder — shown when service is started or done */}
-                  {b.payment_method === 'cod' && ['in_progress', 'completed'].includes(b.status) && (
+                  {/* COD badge — shown when in_progress */}
+                  {b.payment_method === 'cod' && b.status === 'in_progress' && b.payment_status !== 'paid' && (
                     <div className="flex items-start gap-2 mt-1.5 px-2 py-2 rounded-lg" style={{ backgroundColor: '#fef3c7', border: '1.5px solid #f59e0b' }}>
                       <span className="text-sm mt-0.5">💵</span>
-                      <div>
-                        <p className="text-xs font-semibold" style={{ color: '#92400e' }}>
-                          {b.status === 'completed'
-                            ? `₹${Number(b.amount).toLocaleString('en-IN')} to be collected from customer`
-                            : `Ask customer to pay ₹${Number(b.amount).toLocaleString('en-IN')} now`}
-                        </p>
-                        <p className="text-xs mt-0.5" style={{ color: '#b45309' }}>
-                          Customer pays via UPI / Card through the Veranda app.
-                        </p>
-                      </div>
+                      <p className="text-xs font-semibold" style={{ color: '#92400e' }}>
+                        Collect ₹{Number(b.amount).toLocaleString('en-IN')} — tap "Collect Payment" when done
+                      </p>
                     </div>
                   )}
                 </div>
@@ -298,7 +309,19 @@ function BookingsTab() {
                       )}
                     </div>
                   )}
-                  {b.status === 'in_progress' && !isTiffin && !doneIds.has(b.id) && (
+                  {/* ── COD in_progress: "Mark Done" opens payment screen automatically ── */}
+                  {b.status === 'in_progress' && !isTiffin && b.payment_method === 'cod' && (
+                    <button
+                      onClick={() => setCodPaymentBooking(b)}
+                      className="px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-50"
+                      style={{ backgroundColor: '#d1fae5', color: '#065f46' }}
+                    >
+                      ✅ Mark Done
+                    </button>
+                  )}
+
+                  {/* ── Non-COD in_progress: normal completion OTP flow ── */}
+                  {b.status === 'in_progress' && !isTiffin && b.payment_method !== 'cod' && !doneIds.has(b.id) && (
                     <button
                       onClick={() => sendCompletionMutation.mutate(b.id)}
                       disabled={sendCompletionMutation.isPending}
@@ -308,7 +331,7 @@ function BookingsTab() {
                       {sendCompletionMutation.isPending ? 'Sending…' : '✅ Mark Done'}
                     </button>
                   )}
-                  {b.status === 'in_progress' && !isTiffin && doneIds.has(b.id) && (
+                  {b.status === 'in_progress' && !isTiffin && b.payment_method !== 'cod' && doneIds.has(b.id) && (
                     <div className="flex flex-col gap-1.5 items-end">
                       {completionDevOtps[b.id] && (
                         <div className="px-3 py-1.5 rounded-lg text-center" style={{ backgroundColor: '#1e1e2e', border: '1.5px solid #89b4fa' }}>
@@ -316,7 +339,7 @@ function BookingsTab() {
                           <p className="text-xl font-mono font-bold tracking-widest" style={{ color: '#cdd6f4' }}>{completionDevOtps[b.id]}</p>
                         </div>
                       )}
-                      <p className="text-xs font-medium" style={{ color: '#065f46' }}>📱 Enter completion OTP</p>
+                      <p className="text-xs font-medium" style={{ color: '#065f46' }}>📱 Enter completion OTP from customer</p>
                       <div className="flex gap-1">
                         <input
                           type="text"
