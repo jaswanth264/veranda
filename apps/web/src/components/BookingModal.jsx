@@ -30,6 +30,9 @@ export default function BookingModal({ listing, onClose }) {
   const [selectedTime, setSelectedTime] = useState(null);
   const [address, setAddress] = useState('');
   const [notes, setNotes] = useState('');
+
+  const isTiffin = listing?.categories?.type === 'tiffin';
+  const addressRequired = isTiffin;
   const [bookingRef, setBookingRef] = useState(null);
 
   const days = getNext7Days();
@@ -52,15 +55,14 @@ export default function BookingModal({ listing, onClose }) {
 
   const handleConfirm = () => {
     if (!selectedDate || !selectedTime) return;
-    // Combine date + time into ISO string
+    if (addressRequired && !address.trim()) return;
     const [h, m] = selectedTime.split(':');
     const dt = new Date(selectedDate);
     dt.setHours(parseInt(h), parseInt(m), 0, 0);
-
     mutation.mutate({
       listing_id: listing.id,
       scheduled_at: dt.toISOString(),
-      address: address || null,
+      address: address.trim() || null,
       notes: notes || null,
     });
   };
@@ -189,17 +191,35 @@ export default function BookingModal({ listing, onClose }) {
                 </p>
               </div>
 
+              {/* Tiffin delivery info banner */}
+              {isTiffin && (
+                <div className="rounded-xl p-3 flex gap-2" style={{ backgroundColor: '#fef3c7', border: '1.5px solid #f59e0b' }}>
+                  <span className="shrink-0">🛵</span>
+                  <p className="text-xs" style={{ color: '#92400e' }}>
+                    <strong>Delivery info:</strong> The vendor will prepare and deliver your food — via their own delivery or a service like Rapido. Your address is required.
+                  </p>
+                </div>
+              )}
+
               {/* Address */}
               <div>
-                <label className="block text-sm font-medium mb-1.5" style={{ color: '#1a4a47' }}>Address</label>
+                <label className="block text-sm font-medium mb-1.5" style={{ color: '#1a4a47' }}>
+                  Delivery Address
+                  {addressRequired
+                    ? <span className="text-red-500 ml-1">*</span>
+                    : <span className="text-gray-400 font-normal ml-1">(optional)</span>}
+                </label>
                 <input
                   type="text"
                   value={address}
                   onChange={(e) => setAddress(e.target.value)}
-                  placeholder="Vijayawada, Satyanarayanapuram"
+                  placeholder={isTiffin ? 'House no, street, area — Vijayawada' : 'Vijayawada, Satyanarayanapuram'}
                   className="w-full border rounded-xl px-4 py-3 text-sm focus:outline-none"
-                  style={{ borderColor: '#d1d5db' }}
+                  style={{ borderColor: addressRequired && !address.trim() ? '#ef4444' : '#d1d5db' }}
                 />
+                {addressRequired && !address.trim() && (
+                  <p className="text-xs text-red-500 mt-1">Delivery address is required for food orders</p>
+                )}
               </div>
 
               {/* Notes */}
@@ -231,7 +251,7 @@ export default function BookingModal({ listing, onClose }) {
                 </button>
                 <button
                   onClick={handleConfirm}
-                  disabled={mutation.isPending}
+                  disabled={mutation.isPending || (addressRequired && !address.trim())}
                   className="flex-1 py-3 rounded-xl font-semibold text-sm text-white disabled:opacity-60 transition-all"
                   style={{ backgroundColor: '#1a4a47' }}
                 >

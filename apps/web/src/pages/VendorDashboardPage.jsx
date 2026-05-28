@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { getMyVendorProfile } from '../api/vendor';
 import { getMyListings, updateListing } from '../api/listings';
-import { getVendorBookings, updateBookingStatus } from '../api/bookings';
+import { getVendorBookings, updateBookingStatus, sendArrivalOtp, sendCompletionOtp, verifyCompletionOtp } from '../api/bookings';
 import { useAuth } from '../context/AuthContext';
 
 const NAV_ITEMS = [
@@ -14,10 +14,18 @@ const NAV_ITEMS = [
 ];
 
 const STATUS_COLORS = {
-  pending:   { bg: '#fef3c7', color: '#92400e' },
-  confirmed: { bg: '#d1fae5', color: '#065f46' },
-  completed: { bg: '#dbeafe', color: '#1e40af' },
-  cancelled: { bg: '#fee2e2', color: '#991b1b' },
+  pending:                { bg: '#fef3c7', color: '#92400e' },
+  confirmed:              { bg: '#d1fae5', color: '#065f46' },
+  in_progress:            { bg: '#fef3c7', color: '#92400e' },
+  out_for_delivery:       { bg: '#fce7f3', color: '#9d174d' },
+  awaiting_confirmation:  { bg: '#ede9fe', color: '#5b21b6' },
+  completed:              { bg: '#dbeafe', color: '#1e40af' },
+  cancelled:              { bg: '#fee2e2', color: '#991b1b' },
+};
+
+const STATUS_LABELS = {
+  pending: 'Pending', confirmed: 'Confirmed', in_progress: '🔧 In Progress',
+  out_for_delivery: '🛵 On the Way', completed: 'Completed', cancelled: 'Cancelled',
 };
 
 function StatCard({ label, value }) {
@@ -49,6 +57,12 @@ function Toggle({ checked, onChange, disabled }) {
 function BookingsTab() {
   const queryClient = useQueryClient();
   const [filter, setFilter] = useState('all');
+  const [confirmingId, setConfirmingId] = useState(null);
+  const [arrivedIds, setArrivedIds] = useState(new Set());
+  const [otpInputs, setOtpInputs] = useState({});
+  const [devOtps, setDevOtps] = useState({});
+  const [doneIds, setDoneIds] = useState(new Set());       // in_progress bookings where "Mark Done" clicked
+  const [completionDevOtps, setCompletionDevOtps] = useState({}); // dev OTPs for completion step
 
   const { data: bookings = [], isLoading } = useQuery({
     queryKey: ['vendor-bookings', filter],
@@ -59,10 +73,41 @@ function BookingsTab() {
     mutationFn: ({ id, status }) => updateBookingStatus(id, status),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['vendor-bookings'] });
+      setConfirmingId(null);
     },
   });
 
-  const FILTERS = ['all', 'pending', 'confirmed', 'completed', 'cancelled'];
+  const otpMutation = useMutation({
+    mutationFn: ({ id, otp }) => verifyCompletionOtp(id, otp),
+    onSuccess: (_, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ['vendor-bookings'] });
+      setOtpInputs(prev => { const n = { ...prev }; delete n[id]; delete n[`done_${id}`]; return n; });
+      setArrivedIds(prev => { const n = new Set(prev); n.delete(id); return n; });
+      setDoneIds(prev => { const n = new Set(prev); n.delete(id); return n; });
+    },
+  });
+
+  const sendOtpMutation = useMutation({
+    mutationFn: (id) => sendArrivalOtp(id),
+    onSuccess: (res, id) => {
+      setArrivedIds(prev => new Set([...prev, id]));
+      if (res.data?.dev_otp) setDevOtps(prev => ({ ...prev, [id]: res.data.dev_otp }));
+    },
+  });
+
+  const sendCompletionMutation = useMutation({
+    mutationFn: (id) => sendCompletionOtp(id),
+    onSuccess: (res, id) => {
+      setDoneIds(prev => new Set([...prev, id]));
+      if (res.data?.dev_otp) setCompletionDevOtps(prev => ({ ...prev, [id]: res.data.dev_otp }));
+    },
+  });
+
+  const FILTERS = ['all', 'pending', 'confirmed', 'in_progress', 'out_for_delivery', 'completed', 'cancelled'];
+  const FILTER_LABELS = {
+    all: 'All', pending: 'Pending', confirmed: 'Confirmed', in_progress: 'In Progress',
+    out_for_delivery: 'Out for Delivery', completed: 'Completed', cancelled: 'Cancelled',
+  };
 
   return (
     <div className="space-y-4">
@@ -74,14 +119,14 @@ function BookingsTab() {
           <button
             key={f}
             onClick={() => setFilter(f)}
-            className="px-4 py-1.5 rounded-full text-sm font-medium capitalize transition-all"
+            className="px-4 py-1.5 rounded-full text-sm font-medium transition-all"
             style={
               filter === f
                 ? { backgroundColor: '#1a4a47', color: '#fff' }
                 : { backgroundColor: '#fff', color: '#4b7c78', border: '1.5px solid #e8f5f4' }
             }
           >
-            {f}
+            {FILTER_LABELS[f]}
           </button>
         ))}
       </div>
@@ -96,73 +141,202 @@ function BookingsTab() {
         </div>
       )}
 
+      {/* Mark-Done confirmation modal */}
+      {confirmingId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-xl">
+            <p className="text-4xl mb-3">✅</p>
+            <h3 className="font-bold text-lg mb-1" style={{ color: '#1a4a47' }}>Mark service as done?</h3>
+            <p className="text-sm text-gray-500 mb-5">
+              This will send a <strong>6-digit OTP</strong> to the customer’s registered phone number. Ask the customer for the code to complete the booking.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => statusMutation.mutate({ id: confirmingId, status: 'awaiting_confirmation' })}
+                disabled={statusMutation.isPending}
+                className="flex-1 py-2.5 rounded-xl text-sm font-semibold text-white disabled:opacity-60"
+                style={{ backgroundColor: '#1a4a47' }}
+              >
+                {statusMutation.isPending ? 'Sending…' : 'Yes, notify customer'}
+              </button>
+              <button
+                onClick={() => setConfirmingId(null)}
+                disabled={statusMutation.isPending}
+                className="flex-1 py-2.5 rounded-xl text-sm font-semibold"
+                style={{ backgroundColor: '#f3f4f6', color: '#374151' }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="space-y-3">
         {bookings.map((b) => {
           const sc = STATUS_COLORS[b.status] || STATUS_COLORS.pending;
           const dt = new Date(b.scheduled_at);
+          const isTiffin = b.listings?.categories?.type === 'tiffin';
+          const statusLabel = STATUS_LABELS[b.status] || b.status;
           return (
-            <div
-              key={b.id}
-              className="rounded-2xl p-4"
-              style={{ backgroundColor: '#fff', border: '1.5px solid #e8f5f4' }}
-            >
+            <div key={b.id} className="rounded-2xl p-4" style={{ backgroundColor: '#fff', border: '1.5px solid #e8f5f4' }}>
               <div className="flex items-start justify-between gap-3">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
+                    <span className="text-sm">{isTiffin ? '🍱' : '🔧'}</span>
                     <span className="font-semibold text-sm" style={{ color: '#1a4a47' }}>
                       {b.listings?.title || 'Listing'}
                     </span>
-                    <span
-                      className="px-2 py-0.5 rounded-full text-xs font-semibold capitalize"
-                      style={{ backgroundColor: sc.bg, color: sc.color }}
-                    >
-                      {b.status}
+                    <span className="px-2 py-0.5 rounded-full text-xs font-semibold capitalize" style={{ backgroundColor: sc.bg, color: sc.color }}>
+                      {statusLabel}
                     </span>
                   </div>
-                  <p className="text-xs text-gray-500">
-                    👤 {b.profiles?.full_name || 'Customer'} · 📞 {b.profiles?.phone || '—'}
-                  </p>
+                  <p className="text-xs text-gray-500">👤 {b.profiles?.full_name || 'Customer'} · 📞 {b.profiles?.phone || '—'}</p>
                   <p className="text-xs text-gray-500 mt-0.5">
                     📅 {dt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })} at {dt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
                   </p>
-                  {b.address && <p className="text-xs text-gray-500 mt-0.5">📍 {b.address}</p>}
+                  {/* Delivery address — prominent for tiffin */}
+                  {b.address && (
+                    <div className={`flex items-start gap-1.5 mt-1.5 px-2 py-1.5 rounded-lg text-xs ${isTiffin ? 'font-semibold' : ''}`}
+                      style={isTiffin ? { backgroundColor: '#fef3c7', color: '#92400e' } : { color: '#6b7280' }}>
+                      📍 {isTiffin && <span className="shrink-0">Deliver to: </span>}{b.address}
+                    </div>
+                  )}
+                  {!b.address && isTiffin && (
+                    <p className="text-xs text-red-400 mt-1">⚠️ No delivery address provided — contact customer</p>
+                  )}
                   {b.notes && <p className="text-xs text-gray-500 mt-0.5">📝 {b.notes}</p>}
-                  <p className="text-sm font-bold mt-1" style={{ color: '#f59e0b' }}>
-                    ₹{Number(b.amount).toLocaleString('en-IN')}
-                  </p>
+                  <p className="text-sm font-bold mt-1" style={{ color: '#f59e0b' }}>₹{Number(b.amount).toLocaleString('en-IN')}</p>
                 </div>
 
-                {/* Action buttons */}
-                {b.status === 'pending' && (
-                  <div className="flex flex-col gap-2 shrink-0">
-                    <button
-                      onClick={() => statusMutation.mutate({ id: b.id, status: 'confirmed' })}
-                      disabled={statusMutation.isPending}
-                      className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white disabled:opacity-50"
-                      style={{ backgroundColor: '#1a4a47' }}
-                    >
-                      Confirm
+                <div className="flex flex-col gap-2 shrink-0">
+                  {b.status === 'pending' && (<>
+                    <button onClick={() => statusMutation.mutate({ id: b.id, status: 'confirmed' })} disabled={statusMutation.isPending} className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white disabled:opacity-50" style={{ backgroundColor: '#1a4a47' }}>Accept</button>
+                    <button onClick={() => statusMutation.mutate({ id: b.id, status: 'cancelled' })} disabled={statusMutation.isPending} className="px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-50" style={{ backgroundColor: '#fee2e2', color: '#991b1b' }}>Decline</button>
+                  </>)}
+
+                  {/* Tiffin flow: confirmed → out_for_delivery → completed */}
+                  {b.status === 'confirmed' && isTiffin && (
+                    <button onClick={() => statusMutation.mutate({ id: b.id, status: 'out_for_delivery' })} disabled={statusMutation.isPending} className="px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-50" style={{ backgroundColor: '#fce7f3', color: '#9d174d' }}>
+                      🛵 Out for Delivery
                     </button>
+                  )}
+                  {b.status === 'out_for_delivery' && isTiffin && (
+                    <button onClick={() => statusMutation.mutate({ id: b.id, status: 'completed' })} disabled={statusMutation.isPending} className="px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-50" style={{ backgroundColor: '#dbeafe', color: '#1e40af' }}>
+                      ✅ Mark Delivered
+                    </button>
+                  )}
+
+                  {/* Services flow: confirmed → in_progress (via arrival OTP) → completed */}
+                  {b.status === 'confirmed' && !isTiffin && !arrivedIds.has(b.id) && (
                     <button
-                      onClick={() => statusMutation.mutate({ id: b.id, status: 'cancelled' })}
-                      disabled={statusMutation.isPending}
+                      onClick={() => sendOtpMutation.mutate(b.id)}
+                      disabled={sendOtpMutation.isPending}
                       className="px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-50"
-                      style={{ backgroundColor: '#fee2e2', color: '#991b1b' }}
+                      style={{ backgroundColor: '#ede9fe', color: '#5b21b6' }}
                     >
-                      Decline
+                      {sendOtpMutation.isPending ? 'Sending…' : '📍 I’ve Arrived'}
                     </button>
-                  </div>
-                )}
-                {b.status === 'confirmed' && (
-                  <button
-                    onClick={() => statusMutation.mutate({ id: b.id, status: 'completed' })}
-                    disabled={statusMutation.isPending}
-                    className="px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-50 shrink-0"
-                    style={{ backgroundColor: '#dbeafe', color: '#1e40af' }}
-                  >
-                    Mark Done
-                  </button>
-                )}
+                  )}
+                  {b.status === 'confirmed' && !isTiffin && arrivedIds.has(b.id) && (
+                    <div className="flex flex-col gap-1.5 items-end">
+                      {devOtps[b.id] && (
+                        <div className="px-3 py-1.5 rounded-lg text-center" style={{ backgroundColor: '#1e1e2e', border: '1.5px solid #a6e3a1' }}>
+                          <p className="text-xs" style={{ color: '#a6e3a1' }}>🔧 Dev OTP</p>
+                          <p className="text-xl font-mono font-bold tracking-widest" style={{ color: '#cdd6f4' }}>{devOtps[b.id]}</p>
+                        </div>
+                      )}
+                      <p className="text-xs font-medium" style={{ color: '#7c3aed' }}>📱 Enter OTP from customer</p>
+                      <div className="flex gap-1">
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          maxLength={6}
+                          placeholder="000000"
+                          value={otpInputs[b.id] || ''}
+                          onChange={(e) => setOtpInputs(prev => ({ ...prev, [b.id]: e.target.value.replace(/\D/g, '') }))}
+                          className="w-24 px-2 py-1.5 rounded-lg border text-center text-sm font-mono tracking-widest focus:outline-none"
+                          style={{ borderColor: '#c4b5fd', backgroundColor: '#faf5ff' }}
+                        />
+                        <button
+                          onClick={() => otpMutation.mutate({ id: b.id, otp: otpInputs[b.id] })}
+                          disabled={otpMutation.isPending || !otpInputs[b.id] || otpInputs[b.id].length !== 6}
+                          className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white disabled:opacity-50"
+                          style={{ backgroundColor: '#7c3aed' }}
+                        >
+                          {otpMutation.isPending ? '…' : 'Start ✓'}
+                        </button>
+                      </div>
+                      <button
+                        onClick={() => sendOtpMutation.mutate(b.id)}
+                        disabled={sendOtpMutation.isPending}
+                        className="text-xs underline"
+                        style={{ color: '#9ca3af' }}
+                      >
+                        Resend OTP
+                      </button>
+                      {otpMutation.isError && otpMutation.variables?.id === b.id && (
+                        <p className="text-xs" style={{ color: '#dc2626' }}>
+                          {otpMutation.error?.response?.data?.error || 'Invalid OTP'}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  {b.status === 'in_progress' && !isTiffin && !doneIds.has(b.id) && (
+                    <button
+                      onClick={() => sendCompletionMutation.mutate(b.id)}
+                      disabled={sendCompletionMutation.isPending}
+                      className="px-3 py-1.5 rounded-lg text-xs font-semibold disabled:opacity-50"
+                      style={{ backgroundColor: '#d1fae5', color: '#065f46' }}
+                    >
+                      {sendCompletionMutation.isPending ? 'Sending…' : '✅ Mark Done'}
+                    </button>
+                  )}
+                  {b.status === 'in_progress' && !isTiffin && doneIds.has(b.id) && (
+                    <div className="flex flex-col gap-1.5 items-end">
+                      {completionDevOtps[b.id] && (
+                        <div className="px-3 py-1.5 rounded-lg text-center" style={{ backgroundColor: '#1e1e2e', border: '1.5px solid #89b4fa' }}>
+                          <p className="text-xs" style={{ color: '#89b4fa' }}>🔧 Completion OTP</p>
+                          <p className="text-xl font-mono font-bold tracking-widest" style={{ color: '#cdd6f4' }}>{completionDevOtps[b.id]}</p>
+                        </div>
+                      )}
+                      <p className="text-xs font-medium" style={{ color: '#065f46' }}>📱 Enter completion OTP</p>
+                      <div className="flex gap-1">
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          maxLength={6}
+                          placeholder="000000"
+                          value={otpInputs[`done_${b.id}`] || ''}
+                          onChange={(e) => setOtpInputs(prev => ({ ...prev, [`done_${b.id}`]: e.target.value.replace(/\D/g, '') }))}
+                          className="w-24 px-2 py-1.5 rounded-lg border text-center text-sm font-mono tracking-widest focus:outline-none"
+                          style={{ borderColor: '#6ee7b7', backgroundColor: '#f0fdf4' }}
+                        />
+                        <button
+                          onClick={() => otpMutation.mutate({ id: b.id, otp: otpInputs[`done_${b.id}`] })}
+                          disabled={otpMutation.isPending || !otpInputs[`done_${b.id}`] || otpInputs[`done_${b.id}`].length !== 6}
+                          className="px-3 py-1.5 rounded-lg text-xs font-semibold text-white disabled:opacity-50"
+                          style={{ backgroundColor: '#059669' }}
+                        >
+                          {otpMutation.isPending ? '…' : 'Done ✓'}
+                        </button>
+                      </div>
+                      <button
+                        onClick={() => sendCompletionMutation.mutate(b.id)}
+                        disabled={sendCompletionMutation.isPending}
+                        className="text-xs underline"
+                        style={{ color: '#9ca3af' }}
+                      >
+                        Resend OTP
+                      </button>
+                      {otpMutation.isError && otpMutation.variables?.id === b.id && (
+                        <p className="text-xs" style={{ color: '#dc2626' }}>
+                          {otpMutation.error?.response?.data?.error || 'Invalid OTP'}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           );
@@ -233,7 +407,7 @@ function ListingsTab({ listings }) {
 }
 
 export default function VendorDashboardPage() {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState('Dashboard');
 
@@ -298,6 +472,17 @@ export default function VendorDashboardPage() {
             )}
           </button>
         ))}
+        {/* Logout */}
+        <div className="mt-auto pt-4 border-t" style={{ borderColor: '#e8f5f4' }}>
+          <button
+            onClick={logout}
+            className="flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium w-full transition-all hover:bg-red-50"
+            style={{ color: '#ef4444' }}
+          >
+            <span>🚪</span>
+            <span>Sign Out</span>
+          </button>
+        </div>
       </aside>
 
       {/* Mobile bottom nav */}

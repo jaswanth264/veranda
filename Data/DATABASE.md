@@ -91,6 +91,8 @@ erDiagram
         string payment_id
         enum payment_status
         string notes
+        varchar completion_otp
+        timestamp otp_expires_at
         timestamp created_at
     }
 
@@ -205,21 +207,50 @@ erDiagram
 ### `bookings`
 > Core transaction table.
 
-| Column         | Type        | Constraints               | Notes                              |
-|---------------|-------------|--------------------------|-------------------------------------|
-| id             | uuid        | PK, default uuid          |                                     |
-| customer_id    | uuid        | FK → profiles(id)         |                                     |
-| listing_id     | uuid        | FK → listings(id)         |                                     |
-| vendor_id      | uuid        | FK → vendor_profiles(id)  | Denormalized for easy query         |
-| status         | enum        | default `pending`         | `pending/confirmed/completed/cancelled` |
-| scheduled_at   | timestamptz | NOT NULL                  | When service/delivery is needed     |
-| address        | text        |                           | Customer's address for this booking |
-| amount         | numeric     | NOT NULL                  | Total paid by customer              |
-| commission     | numeric     |                           | Platform's cut (5-10%)             |
-| payment_id     | text        |                           | Razorpay payment ID                 |
-| payment_status | enum        | default `pending`         | `pending/paid/refunded`             |
-| notes          | text        |                           | Special instructions                |
-| created_at     | timestamptz | default now()             |                                     |
+| Column           | Type        | Constraints               | Notes                                                        |
+|-----------------|-------------|--------------------------|--------------------------------------------------------------|
+| id               | uuid        | PK, default uuid          |                                                              |
+| customer_id      | uuid        | FK → profiles(id)         |                                                              |
+| listing_id       | uuid        | FK → listings(id)         |                                                              |
+| vendor_id        | uuid        | FK → vendor_profiles(id)  | Denormalized for easy query                                  |
+| status           | enum        | default `pending`         | See status enum below                                        |
+| scheduled_at     | timestamptz | NOT NULL                  | When service/delivery is needed                              |
+| address          | text        |                           | Customer's address (required for tiffin)                     |
+| amount           | numeric     | NOT NULL                  | Total paid by customer                                       |
+| commission       | numeric     |                           | Platform's cut (5-10%)                                       |
+| payment_id       | text        |                           | Razorpay payment ID                                          |
+| payment_status   | enum        | default `pending`         | `pending/paid/refunded`                                      |
+| notes            | text        |                           | Special instructions                                         |
+| completion_otp   | varchar(6)  | nullable                  | Active OTP (arrival or completion). Cleared after use.       |
+| otp_expires_at   | timestamptz | nullable                  | OTP expiry (15 min window). Cleared after use.               |
+| created_at       | timestamptz | default now()             |                                                              |
+
+**`booking_status` enum values:**
+| Value                  | Who Sets It    | Description                                               |
+|-----------------------|----------------|-----------------------------------------------------------|
+| `pending`             | System         | Booking created, waiting for vendor to accept             |
+| `confirmed`           | Vendor         | Vendor accepted the booking                               |
+| `in_progress`         | System (OTP)   | **Services only** — vendor arrived, arrival OTP verified  |
+| `out_for_delivery`    | Vendor         | **Tiffin only** — food dispatched for delivery            |
+| `awaiting_confirmation` | (deprecated) | Replaced by dual-OTP flow                                |
+| `completed`           | System (OTP)   | Services: completion OTP verified. Tiffin: marked delivered |
+| `cancelled`           | Vendor/Customer| Booking cancelled                                         |
+
+**Booking workflows by category:**
+```
+🔧 SERVICES (plumber, maid, electrician, etc.)
+  pending → confirmed
+    → Vendor "I've Arrived" → [ARRIVAL OTP sent to customer SMS]
+    → Customer reads OTP to vendor → vendor enters it
+  in_progress
+    → Vendor "Mark Done" → [COMPLETION OTP sent to customer SMS]
+    → Customer reads OTP to vendor → vendor enters it
+  completed
+
+🍱 TIFFIN / HOME COOK
+  pending → confirmed → out_for_delivery → completed
+  (no OTP — vendor delivers and marks done)
+```
 
 ---
 
