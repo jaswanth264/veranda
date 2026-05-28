@@ -2,8 +2,21 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { getMyBookings, cancelBooking, confirmCompletion } from '../api/bookings';
+import { createPaymentOrder, verifyPayment } from '../api/payments';
 import { useBookingRealtime } from '../hooks/useBookingRealtime';
 import Layout from '../components/Layout';
+import { useAuth } from '../context/AuthContext';
+
+function loadRazorpayScript() {
+  return new Promise((resolve) => {
+    if (window.Razorpay) return resolve(true);
+    const s = document.createElement('script');
+    s.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    s.onload = () => resolve(true);
+    s.onerror = () => resolve(false);
+    document.body.appendChild(s);
+  });
+}
 
 const TABS = [
   { key: '',                       label: 'All' },
@@ -34,6 +47,10 @@ function formatDate(iso) {
 
 export default function CustomerDashboardPage() {
   const [activeTab, setActiveTab] = useState('');
+  const [doorstepPaying, setDoorstepPaying] = useState(null); // bookingId being paid at doorstep
+  const [doorstepError, setDoorstepError] = useState({});   // { [bookingId]: errorMsg }
+  const [doorstepPaid, setDoorstepPaid] = useState({});     // { [bookingId]: true }
+  const { user } = useAuth();
   const queryClient = useQueryClient();
 
   const { data, isLoading } = useQuery({
@@ -55,6 +72,63 @@ export default function CustomerDashboardPage() {
     mutationFn: confirmCompletion,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['my-bookings'] }),
   });
+
+  async function handleDoorstepPay(b) {
+    setDoorstepPaying(b.id);
+    setDoorstepError((prev) => ({ ...prev, [b.id]: null }));
+    try {
+      const orderRes = await createPaymentOrder(b.id);
+      const order = orderRes.data;
+      const loaded = await loadRazorpayScript();
+      if (!loaded) {
+        setDoorstepError((prev) => ({ ...prev, [b.id]: 'Payment gateway failed to load.' }));
+        setDoorstepPaying(null);
+        return;
+      }
+      const options = {
+        key: order.key_id,
+        amount: order.amount,
+        currency: order.currency,
+        name: 'Veranda',
+        description: b.vendor_profiles?.business_name || 'Service payment',
+        order_id: order.order_id,
+        prefill: {
+          name: user?.user_metadata?.full_name || '',
+          email: user?.email || '',
+          contact: user?.user_metadata?.phone || '',
+          method: 'upi',
+        },
+        theme: { color: '#f59e0b' },
+        handler: async (response) => {
+          try {
+            await verifyPayment({
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+              booking_id: b.id,
+            });
+            setDoorstepPaid((prev) => ({ ...prev, [b.id]: true }));
+            queryClient.invalidateQueries({ queryKey: ['my-bookings'] });
+          } catch {
+            setDoorstepError((prev) => ({ ...prev, [b.id]: 'Payment received but verification failed. Contact support.' }));
+          }
+          setDoorstepPaying(null);
+        },
+        modal: {
+          ondismiss: () => setDoorstepPaying(null),
+        },
+      };
+      const rzp = new window.Razorpay(options);
+      rzp.on('payment.failed', (e) => {
+        setDoorstepError((prev) => ({ ...prev, [b.id]: `Payment failed: ${e.error.description}` }));
+        setDoorstepPaying(null);
+      });
+      rzp.open();
+    } catch (err) {
+      setDoorstepError((prev) => ({ ...prev, [b.id]: err?.response?.data?.error || 'Payment failed.' }));
+      setDoorstepPaying(null);
+    }
+  }
 
   const bookings = data || [];
 
@@ -145,9 +219,35 @@ export default function CustomerDashboardPage() {
 
                   {/* In-progress banner — service is underway */}
                   {b.status === 'in_progress' && (
-                    <div className="flex items-center gap-2 p-3 rounded-xl" style={{ backgroundColor: '#fef3c7', border: '1.5px solid #fcd34d' }}>
-                      <span className="text-lg">🔧</span>
-                      <p className="text-sm font-medium" style={{ color: '#92400e' }}>Service is in progress at your location.</p>
+                    <div className="flex flex-col gap-2">
+                      <div className="flex items-center gap-2 p-3 rounded-xl" style={{ backgroundColor: '#fef3c7', border: '1.5px solid #fcd34d' }}>
+                        <span className="text-lg">🔧</span>
+                        <p className="text-sm font-medium" style={{ color: '#92400e' }}>Service is in progress at your location.</p>
+                      </div>
+                      {/* COD — pay via Razorpay at doorstep (platform QR, not vendor UPI) */}
+                      {b.payment_method === 'cod' && b.payment_status !== 'paid' && !doorstepPaid[b.id] && (
+                        <>
+                          <button
+                            onClick={() => handleDoorstepPay(b)}
+                            disabled={doorstepPaying === b.id}
+                            className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl text-sm font-semibold transition disabled:opacity-60"
+                            style={{ backgroundColor: '#1a4a47', color: '#fff' }}
+                          >
+                            <span>📱</span>
+                            {doorstepPaying === b.id ? 'Opening payment...' : `Pay ₹${Number(b.amount).toLocaleString('en-IN')} via UPI / Card`}
+                          </button>
+                          {doorstepError[b.id] && (
+                            <p className="text-xs text-red-600">{doorstepError[b.id]}</p>
+                          )}
+                        </>
+                      )}
+                      {/* Already paid at doorstep */}
+                      {(b.payment_status === 'paid' || doorstepPaid[b.id]) && (
+                        <div className="flex items-center gap-2 px-3 py-2 rounded-xl" style={{ backgroundColor: '#d1fae5', border: '1px solid #6ee7b7' }}>
+                          <span>✅</span>
+                          <p className="text-xs font-semibold" style={{ color: '#065f46' }}>Payment of ₹{Number(b.amount).toLocaleString('en-IN')} received.</p>
+                        </div>
+                      )}
                     </div>
                   )}
 

@@ -40,11 +40,14 @@ async function resolveProfileId(authUserId, userMeta) {
 
 // ── POST /api/bookings ─ customer creates a booking ──────────────────────────
 router.post('/', requireAuth, async (req, res) => {
-  const { listing_id, scheduled_at, address, notes } = req.body;
+  const { listing_id, scheduled_at, address, notes, payment_method } = req.body;
 
   if (!listing_id || !scheduled_at) {
     return res.status(400).json({ error: 'listing_id and scheduled_at are required' });
   }
+
+  const validPaymentMethods = ['online', 'cod'];
+  const resolvedPaymentMethod = validPaymentMethods.includes(payment_method) ? payment_method : 'online';
 
   // Resolve profiles.id (FK required by bookings.customer_id)
   const { profileId, error: profileErr } = await resolveProfileId(req.user.id, {
@@ -85,6 +88,9 @@ router.post('/', requireAuth, async (req, res) => {
       notes: notes || null,
       amount: listing.price,
       status: 'pending',
+      payment_method: resolvedPaymentMethod,
+      // COD bookings skip online payment — payment collected at doorstep after service
+      payment_status: resolvedPaymentMethod === 'cod' ? 'cod_pending' : 'pending',
     })
     .select()
     .single();

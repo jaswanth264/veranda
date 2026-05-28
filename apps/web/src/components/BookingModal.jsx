@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 import { createBooking } from '../api/bookings';
+import { createPaymentOrder, verifyPayment } from '../api/payments';
 
 const TIME_SLOTS = [
   { key: '08:00', label: 'Morning', sub: '8:00 AM' },
@@ -25,27 +27,25 @@ const MONTH_NAMES = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct'
 
 export default function BookingModal({ listing, onClose }) {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const [step, setStep] = useState(1);
   const [selectedDate, setSelectedDate] = useState(null);
   const [selectedTime, setSelectedTime] = useState(null);
   const [address, setAddress] = useState('');
   const [notes, setNotes] = useState('');
+  const [bookingRef, setBookingRef] = useState(null);
+  const [paymentError, setPaymentError] = useState(null);
+  const [isProcessingPayment, setIsProcessingPayment] = useState(false);
 
   const isTiffin = listing?.categories?.type === 'tiffin';
   const addressRequired = isTiffin;
-  const [bookingRef, setBookingRef] = useState(null);
+  // Tiffin always pays online (delivery requires prepayment); services can choose
+  const [paymentMethod, setPaymentMethod] = useState(isTiffin ? 'online' : 'online');
 
   const days = getNext7Days();
 
-  const mutation = useMutation({
-    mutationFn: createBooking,
-    onSuccess: (res) => {
-      setBookingRef(res.data.booking.id.slice(0, 8).toUpperCase());
-      setStep(3);
-    },
-  });
+  const bookingMutation = useMutation({ mutationFn: createBooking });
 
-  // Return a safe, user-friendly error message — never expose raw server/DB errors
   function getErrorMessage(err) {
     const status = err?.response?.status;
     const msg = err?.response?.data?.error;
@@ -53,18 +53,106 @@ export default function BookingModal({ listing, onClose }) {
     return msg;
   }
 
-  const handleConfirm = () => {
+  function loadRazorpayScript() {
+    return new Promise((resolve) => {
+      if (window.Razorpay) return resolve(true);
+      const script = document.createElement('script');
+      script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+      script.onload = () => resolve(true);
+      script.onerror = () => resolve(false);
+      document.body.appendChild(script);
+    });
+  }
+
+  const handleConfirm = async () => {
     if (!selectedDate || !selectedTime) return;
     if (addressRequired && !address.trim()) return;
-    const [h, m] = selectedTime.split(':');
-    const dt = new Date(selectedDate);
-    dt.setHours(parseInt(h), parseInt(m), 0, 0);
-    mutation.mutate({
-      listing_id: listing.id,
-      scheduled_at: dt.toISOString(),
-      address: address.trim() || null,
-      notes: notes || null,
-    });
+
+    setPaymentError(null);
+    setIsProcessingPayment(true);
+
+    try {
+      const [h, m] = selectedTime.split(':');
+      const dt = new Date(selectedDate);
+      dt.setHours(parseInt(h), parseInt(m), 0, 0);
+
+      // Step 1: Create booking (always)
+      const bookingRes = await bookingMutation.mutateAsync({
+        listing_id: listing.id,
+        scheduled_at: dt.toISOString(),
+        address: address.trim() || null,
+        notes: notes || null,
+        payment_method: paymentMethod,
+      });
+      const booking = bookingRes.data.booking;
+
+      // COD — skip payment, go straight to success
+      if (paymentMethod === 'cod') {
+        setBookingRef(booking.id.slice(0, 8).toUpperCase());
+        setStep(3);
+        setIsProcessingPayment(false);
+        return;
+      }
+
+      // Online — create Razorpay order and open checkout
+      const orderRes = await createPaymentOrder(booking.id);
+      const order = orderRes.data;
+
+      const scriptLoaded = await loadRazorpayScript();
+      if (!scriptLoaded) {
+        setPaymentError('Payment gateway failed to load. Please try again.');
+        setIsProcessingPayment(false);
+        return;
+      }
+
+      const options = {
+        key: order.key_id,
+        amount: order.amount,
+        currency: order.currency,
+        name: 'Veranda',
+        description: listing.title,
+        order_id: order.order_id,
+        prefill: {
+          name: user?.user_metadata?.full_name || '',
+          email: user?.email || '',
+          contact: user?.user_metadata?.phone || '',
+          method: 'upi',
+        },
+        theme: { color: '#f59e0b' },
+        handler: async (response) => {
+          try {
+            await verifyPayment({
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+              booking_id: booking.id,
+            });
+            setBookingRef(booking.id.slice(0, 8).toUpperCase());
+            setStep(3);
+          } catch (err) {
+            setPaymentError('Payment received but verification failed. Contact support with ref: ' + booking.id.slice(0, 8).toUpperCase());
+          }
+          setIsProcessingPayment(false);
+        },
+        modal: {
+          ondismiss: () => {
+            setPaymentError('Payment was cancelled. Your booking is saved — retry payment from your dashboard.');
+            setIsProcessingPayment(false);
+          },
+        },
+      };
+
+      const rzp = new window.Razorpay(options);
+      rzp.on('payment.failed', (response) => {
+        setPaymentError(`Payment failed: ${response.error.description}`);
+        setIsProcessingPayment(false);
+      });
+      rzp.open();
+
+    } catch (err) {
+      setPaymentError(getErrorMessage(err));
+      setIsProcessingPayment(false);
+    }
   };
 
   const price = parseFloat(listing.price);
@@ -237,25 +325,68 @@ export default function BookingModal({ listing, onClose }) {
                 />
               </div>
 
-              {mutation.isError && (
-                <p className="text-red-500 text-sm">{getErrorMessage(mutation.error)}</p>
+              {/* Payment method — services only (tiffin always online) */}
+              {!isTiffin && (
+                <div>
+                  <p className="text-sm font-semibold mb-2" style={{ color: '#1a4a47' }}>Payment Method</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      { value: 'online', icon: '💳', title: 'Pay Online', sub: 'UPI, Card, Netbanking' },
+                      { value: 'cod',    icon: '💵', title: 'Pay at Doorstep', sub: 'Cash / UPI after service' },
+                    ].map((opt) => (
+                      <button
+                        key={opt.value}
+                        onClick={() => setPaymentMethod(opt.value)}
+                        className="flex flex-col items-center gap-1 py-3 px-2 rounded-xl border-2 text-center transition-all"
+                        style={
+                          paymentMethod === opt.value
+                            ? { borderColor: '#1a4a47', backgroundColor: '#f0f9f8' }
+                            : { borderColor: '#e5e7eb', backgroundColor: '#fff' }
+                        }
+                      >
+                        <span className="text-xl">{opt.icon}</span>
+                        <p className="text-xs font-semibold" style={{ color: '#1a4a47' }}>{opt.title}</p>
+                        <p className="text-xs text-gray-400">{opt.sub}</p>
+                        {paymentMethod === opt.value && (
+                          <span className="text-xs font-bold mt-0.5" style={{ color: '#059669' }}>✓ Selected</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                  {paymentMethod === 'cod' && (
+                    <p className="text-xs mt-2 px-3 py-2 rounded-lg" style={{ backgroundColor: '#fef3c7', color: '#92400e' }}>
+                      💡 You'll pay the vendor directly (cash or UPI) after the service is completed.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {(bookingMutation.isError || paymentError) && (
+                <p className="text-red-500 text-sm">
+                  {paymentError || getErrorMessage(bookingMutation.error)}
+                </p>
               )}
 
               <div className="flex gap-3 mt-2">
                 <button
                   onClick={() => setStep(1)}
-                  className="flex-1 py-3 rounded-xl font-semibold text-sm border transition-all"
+                  disabled={isProcessingPayment}
+                  className="flex-1 py-3 rounded-xl font-semibold text-sm border transition-all disabled:opacity-40"
                   style={{ borderColor: '#1a4a47', color: '#1a4a47' }}
                 >
                   Back
                 </button>
                 <button
                   onClick={handleConfirm}
-                  disabled={mutation.isPending || (addressRequired && !address.trim())}
+                  disabled={isProcessingPayment || (addressRequired && !address.trim())}
                   className="flex-1 py-3 rounded-xl font-semibold text-sm text-white disabled:opacity-60 transition-all"
                   style={{ backgroundColor: '#1a4a47' }}
                 >
-                  {mutation.isPending ? 'Booking…' : 'Confirm Booking'}
+                  {isProcessingPayment
+                    ? 'Processing…'
+                    : paymentMethod === 'cod'
+                      ? 'Confirm Booking'
+                      : `Pay ₹${price % 1 === 0 ? price.toFixed(0) : price.toFixed(2)}`}
                 </button>
               </div>
             </div>
@@ -271,17 +402,36 @@ export default function BookingModal({ listing, onClose }) {
                 ✅
               </div>
               <div>
-                <h3 className="text-xl font-bold" style={{ color: '#1a4a47' }}>Booking Confirmed!</h3>
-                <p className="text-sm text-gray-500 mt-1">Your booking has been placed successfully.</p>
+                <h3 className="text-xl font-bold" style={{ color: '#1a4a47' }}>
+                  {paymentMethod === 'cod' ? 'Booking Confirmed!' : 'Payment Successful!'}
+                </h3>
+                <p className="text-sm text-gray-500 mt-1">
+                  {paymentMethod === 'cod'
+                    ? 'Your booking is placed. Pay the vendor after the service is done.'
+                    : 'Your booking is confirmed and paid.'}
+                </p>
               </div>
               <div
-                className="rounded-2xl px-6 py-4 w-full"
+                className="rounded-2xl px-6 py-4 w-full space-y-2"
                 style={{ backgroundColor: '#fef3c7' }}
               >
-                <p className="text-xs text-gray-500">Booking Reference</p>
-                <p className="font-bold text-lg tracking-widest mt-1" style={{ color: '#1a4a47' }}>
-                  #{bookingRef}
-                </p>
+                <div>
+                  <p className="text-xs text-gray-500">Booking Reference</p>
+                  <p className="font-bold text-lg tracking-widest mt-0.5" style={{ color: '#1a4a47' }}>
+                    #{bookingRef}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5 justify-center">
+                  {paymentMethod === 'cod' ? (
+                    <span className="text-xs px-2 py-0.5 rounded-full font-semibold" style={{ backgroundColor: '#fef3c7', color: '#92400e' }}>
+                      💵 Pay at Doorstep — ₹{price % 1 === 0 ? price.toFixed(0) : price.toFixed(2)}
+                    </span>
+                  ) : (
+                    <span className="text-xs px-2 py-0.5 rounded-full font-semibold" style={{ backgroundColor: '#d1fae5', color: '#065f46' }}>
+                      💳 Paid ₹{price % 1 === 0 ? price.toFixed(0) : price.toFixed(2)}
+                    </span>
+                  )}
+                </div>
               </div>
               <div className="flex flex-col gap-3 w-full mt-2">
                 <button

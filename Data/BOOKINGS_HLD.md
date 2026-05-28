@@ -17,7 +17,7 @@ The Booking system is the core revenue engine of Veranda. It handles two distinc
 
 ```mermaid
 stateDiagram-v2
-    [*] --> pending : Customer creates booking
+    [*] --> pending : Customer creates booking\n(payment_method = online|cod)
 
     pending --> confirmed : Vendor accepts
     pending --> cancelled : Vendor declines / Customer cancels
@@ -38,7 +38,60 @@ stateDiagram-v2
 
 ---
 
-## 3. Services Booking Flow (Dual OTP)
+## 3. IO Diagram — Booking API Request/Response
+
+```mermaid
+flowchart LR
+    subgraph CUSTOMER["👤 Customer"]
+        CI["Input:\nlisting_id\nscheduled_at\naddress\nnotes\npayment_method"]
+    end
+
+    subgraph SERVER["🖥️ Server — POST /bookings"]
+        S1["Validate listing exists\nResolve profileId\nCalculate commission\nSet payment_status"]
+        S2{payment_method}
+        S3["payment_status = 'pending'\n(online)"]
+        S4["payment_status = 'cod_pending'\n(cod)"]
+    end
+
+    subgraph OUT["📤 Response"]
+        R1["booking_id\nstatus = pending\npayment_status\namount\ncommission"]
+    end
+
+    CI --> S1 --> S2
+    S2 -->|online| S3 --> R1
+    S2 -->|cod| S4 --> R1
+```
+
+```mermaid
+flowchart LR
+    subgraph VENDOR["🔧 Vendor"]
+        VI1["I've Arrived click\n→ POST /send-arrival-otp"]
+        VI2["Enter arrival OTP\n→ POST /verify-otp"]
+        VI3["Mark Done click\n→ POST /send-completion-otp"]
+        VI4["Enter completion OTP\n→ POST /verify-otp"]
+    end
+
+    subgraph SYS["🖥️ System"]
+        SYS1["Generate OTP\nSave to booking\nSend SMS (prod)\nReturn dev_otp"]
+        SYS2["Verify OTP\nstatus = in_progress"]
+        SYS3["Generate NEW OTP\nSave to booking\nSend SMS (prod)"]
+        SYS4["Verify OTP\nstatus = completed\nClear OTP fields"]
+    end
+
+    subgraph CUST["👤 Customer"]
+        C1["Receives SMS OTP\n(or reads from console)"]
+        C2["Reads OTP to vendor"]
+        C3["Receives 2nd SMS OTP"]
+        C4["Reads OTP to vendor"]
+    end
+
+    VI1 --> SYS1 --> C1 --> C2 --> VI2 --> SYS2
+    SYS2 --> VI3 --> SYS3 --> C3 --> C4 --> VI4 --> SYS4
+```
+
+---
+
+## 4. Services Booking Flow (Dual OTP)
 
 ```
 CUSTOMER                       SYSTEM                         VENDOR
@@ -70,7 +123,44 @@ Read OTP to vendor ────────────────────�
 
 ---
 
-## 4. Tiffin Booking Flow (No OTP)
+## 4. Services Booking Flow (Dual OTP + COD Payment)
+
+```
+CUSTOMER                       SYSTEM                         VENDOR
+──────────                     ──────                         ──────
+Book listing ──────────────► POST /bookings
+Choose pay_method ✓           status = pending
+                              [online] payment_status=pending
+                              [cod]    payment_status=cod_pending
+                                                ◄─────────── Accept booking
+                              status = confirmed
+                                                ◄─────────── Click "I've Arrived"
+                              POST /send-arrival-otp
+                              Generate 6-digit OTP
+                              Save to bookings.completion_otp
+SMS: "OTP: 482917" ◄────────  [Production: send SMS]
+                              [Dev: return in response]
+Read OTP to vendor ──────────────────────────────────────► Enter OTP
+                              POST /verify-otp
+                              status = in_progress ──────────► See "🔧 In Progress"
+                                                               💵 [COD] "Collect ₹XXX
+                                                                 — cash or UPI QR"
+[COD] "📱 Pay via UPI Scan" ←── CustomerDashboard shows UPI button
+Opens QR modal ────────────
+Scans vendor UPI QR ───────────────────────────────────── Vendor receives UPI ✅
+
+                                                ◄─────────── Click "Mark Done"
+                              POST /send-completion-otp
+                              Generate NEW 6-digit OTP
+SMS: "OTP: 731042" ◄────────  [Production: send SMS]
+Read OTP to vendor ──────────────────────────────────────► Enter OTP
+                              POST /verify-otp
+                              status = completed ◄──────────► ✅ Booking Complete
+```
+
+---
+
+## 5. Tiffin Booking Flow (No OTP, Online Payment Only)
 
 ```
 CUSTOMER                       SYSTEM                         VENDOR
@@ -89,22 +179,22 @@ Address required ✓            status = pending
 
 ---
 
-## 5. API Endpoints
+## 6. API Endpoints
 
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| `POST` | `/api/bookings` | Customer | Create a booking |
-| `GET` | `/api/bookings/mine` | Customer | Get customer's bookings |
-| `GET` | `/api/bookings/vendor` | Vendor | Get vendor's incoming bookings |
-| `PUT` | `/api/bookings/:id/status` | Vendor | Update status (confirmed, out_for_delivery, completed, cancelled) |
-| `POST` | `/api/bookings/:id/send-arrival-otp` | Vendor | Generate & send arrival OTP (confirmed → triggers) |
-| `POST` | `/api/bookings/:id/send-completion-otp` | Vendor | Generate & send completion OTP (in_progress → triggers) |
-| `POST` | `/api/bookings/:id/verify-otp` | Vendor | Verify OTP: confirmed→in_progress OR in_progress→completed |
-| `DELETE` | `/api/bookings/:id` | Customer | Cancel a pending booking |
+| Method | Endpoint | Auth | Input | Output |
+|--------|----------|------|-------|--------|
+| `POST` | `/api/bookings` | Customer | `{ listing_id, scheduled_at, address, notes, payment_method }` | `{ booking }` |
+| `GET` | `/api/bookings/mine` | Customer | `?status=` | `{ bookings[] }` with vendor UPI ID |
+| `GET` | `/api/bookings/vendor` | Vendor | `?status=` | `{ bookings[] }` with customer profile |
+| `PUT` | `/api/bookings/:id/status` | Vendor | `{ status }` | `{ booking }` |
+| `POST` | `/api/bookings/:id/send-arrival-otp` | Vendor | — | `{ dev_otp }` (dev only) |
+| `POST` | `/api/bookings/:id/send-completion-otp` | Vendor | — | `{ dev_otp }` (dev only) |
+| `POST` | `/api/bookings/:id/verify-otp` | Vendor | `{ otp }` | `{ booking, message }` |
+| `DELETE` | `/api/bookings/:id` | Customer | — | `{ message }` |
 
 ---
 
-## 6. OTP Design
+## 7. OTP Design
 
 | Property | Value |
 |---------|-------|
@@ -119,7 +209,7 @@ Address required ✓            status = pending
 
 ---
 
-## 7. Status Transition Rules (Server-Enforced)
+## 8. Status Transition Rules (Server-Enforced)
 
 ```
 PUT /status allowed values: confirmed, out_for_delivery, completed, cancelled
@@ -139,7 +229,7 @@ Tiffin:
 
 ---
 
-## 8. Real-time Notifications (Supabase Realtime)
+## 9. Real-time Notifications (Supabase Realtime)
 
 Customer receives in-app toast when their booking status changes:
 
@@ -157,11 +247,11 @@ Implementation: `useBookingRealtime(profileId)` hook — subscribes to `postgres
 
 ## 9. Customer Dashboard — Status UI
 
-| Status | Tab | Badge Color | Banner |
+| Status | Tab | Badge Color | Banner / Action |
 |--------|-----|------------|--------|
 | `pending` | Upcoming | Amber | — |
 | `confirmed` | Confirmed | Green | — |
-| `in_progress` | 🔧 In Progress | Amber | "Service is in progress at your location" |
+| `in_progress` | 🔧 In Progress | Amber | "Service is in progress" + `[📱 Pay via UPI Scan]` (COD only) |
 | `out_for_delivery` | On the Way 🛵 | Pink | "Your food is on the way!" |
 | `completed` | Completed | Blue | — |
 | `cancelled` | Cancelled | Red | — |
@@ -170,18 +260,25 @@ Implementation: `useBookingRealtime(profileId)` hook — subscribes to `postgres
 
 ## 10. Vendor Dashboard — Booking Card Actions
 
-### Services Booking
+### Services Booking (Online Payment)
 ```
 Status: pending     → [Accept] [Decline]
 Status: confirmed   → [📍 I've Arrived]
-                       ↓ (OTP sent to customer)
+                       ↓ (Arrival OTP sent to customer SMS)
                       [🔧 Dev OTP: 482917]
-                      [Enter OTP] [Start ✓]
+                      [Enter OTP ______] [Start ✓]
 Status: in_progress → [✅ Mark Done]
-                       ↓ (OTP sent to customer)
-                      [🔧 Completion OTP: 731042]
-                      [Enter OTP] [Done ✓]
+                       ↓ (Completion OTP sent to customer SMS)
+                      [🔵 Completion OTP: 731042]
+                      [Enter OTP ______] [Done ✓]
 Status: completed   → (no actions)
+```
+
+### Services Booking (COD Payment)
+```
+Status: in_progress → 💵 "Collect ₹XXX — cash or UPI QR"
+                         "Customer can scan your UPI QR from their app to pay directly."
+Status: completed   → 💵 "Collect ₹XXX from customer"
 ```
 
 ### Tiffin Booking
@@ -202,6 +299,9 @@ Status: completed        → (no actions)
 | `20260528000001_booking_out_for_delivery.sql` | Added `out_for_delivery` to enum |
 | `20260528000002_booking_completion_otp.sql` | Added `completion_otp` + `otp_expires_at` columns |
 | `20260528000003_booking_in_progress.sql` | Added `in_progress` to enum |
+| `20260528000004_booking_razorpay_order_id.sql` | Added `razorpay_order_id` column |
+| `20260528000005_booking_payment_method.sql` | Added `payment_method` column (online / cod) |
+| `20260528000006_vendor_upi_id.sql` | Added `upi_id` to `vendor_profiles` for COD QR scan |
 
 ---
 
@@ -214,6 +314,7 @@ Status: completed        → (no actions)
 - Vendor can only verify OTPs for their own bookings (FK check)
 - `dev_otp` is only returned when `NODE_ENV !== 'production'`
 - All 500 errors use generic messages — raw DB errors never exposed to client
+- Razorpay `create-order` blocked for COD bookings (guard prevents accidental charges)
 
 ---
 
@@ -221,9 +322,12 @@ Status: completed        → (no actions)
 
 | Feature | Priority | Step |
 |---------|----------|------|
-| Razorpay payment after completed | 🔴 High | Step 13 |
+| ~~Razorpay payment integration~~ | ✅ Done | Step 13 |
+| ~~COD payment option~~ | ✅ Done | Step 13 |
+| ~~UPI QR scanner for COD~~ | ✅ Done | Step 13 |
 | MSG91 SMS integration (real OTP) | 🔴 High | Step 15 |
 | Reviews & ratings after completed | 🟡 Medium | Step 14 |
+| Vendor: "Mark Payment Received" for COD | 🟡 Medium | Step 13+ |
 | Booking cancellation with refund | 🟡 Medium | Step 13+ |
 | Admin dispute resolution | 🟢 Low | Later |
 | Repeat/subscription bookings (tiffin monthly) | 🟢 Low | Later |

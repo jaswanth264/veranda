@@ -207,6 +207,22 @@ function BookingsTab() {
                   )}
                   {b.notes && <p className="text-xs text-gray-500 mt-0.5">📝 {b.notes}</p>}
                   <p className="text-sm font-bold mt-1" style={{ color: '#f59e0b' }}>₹{Number(b.amount).toLocaleString('en-IN')}</p>
+                  {/* COD reminder — shown when service is started or done */}
+                  {b.payment_method === 'cod' && ['in_progress', 'completed'].includes(b.status) && (
+                    <div className="flex items-start gap-2 mt-1.5 px-2 py-2 rounded-lg" style={{ backgroundColor: '#fef3c7', border: '1.5px solid #f59e0b' }}>
+                      <span className="text-sm mt-0.5">💵</span>
+                      <div>
+                        <p className="text-xs font-semibold" style={{ color: '#92400e' }}>
+                          {b.status === 'completed'
+                            ? `₹${Number(b.amount).toLocaleString('en-IN')} to be collected from customer`
+                            : `Ask customer to pay ₹${Number(b.amount).toLocaleString('en-IN')} now`}
+                        </p>
+                        <p className="text-xs mt-0.5" style={{ color: '#b45309' }}>
+                          Customer pays via UPI / Card through the Veranda app.
+                        </p>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex flex-col gap-2 shrink-0">

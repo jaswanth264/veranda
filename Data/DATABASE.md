@@ -55,6 +55,7 @@ erDiagram
         bool is_featured
         float rating
         int total_reviews
+        string upi_id
         timestamp created_at
     }
 
@@ -88,8 +89,10 @@ erDiagram
         string address
         numeric amount
         numeric commission
+        string payment_method
         string payment_id
         enum payment_status
+        string razorpay_order_id
         string notes
         varchar completion_otp
         timestamp otp_expires_at
@@ -158,6 +161,7 @@ erDiagram
 | is_featured    | boolean     | default false         | Paid promotion                |
 | rating         | float4      | default 0             | Avg of all reviews            |
 | total_reviews  | int         | default 0             |                               |
+| upi_id         | text        | nullable              | UPI handle for COD QR scan (e.g. `name@okaxis`) |
 | created_at     | timestamptz | default now()         |                               |
 
 ---
@@ -218,11 +222,13 @@ erDiagram
 | address          | text        |                           | Customer's address (required for tiffin)                     |
 | amount           | numeric     | NOT NULL                  | Total paid by customer                                       |
 | commission       | numeric     |                           | Platform's cut (5-10%)                                       |
-| payment_id       | text        |                           | Razorpay payment ID                                          |
-| payment_status   | enum        | default `pending`         | `pending/paid/refunded`                                      |
+| payment_method   | varchar(10) | default `online`          | `online` or `cod` (CHECK constraint). Tiffin always `online` |
+| payment_id       | text        |                           | Razorpay payment ID (online only)                            |
+| payment_status   | enum        | default `pending`         | `pending` / `paid` / `cod_pending` / `refunded`              |
 | notes            | text        |                           | Special instructions                                         |
 | completion_otp   | varchar(6)  | nullable                  | Active OTP (arrival or completion). Cleared after use.       |
 | otp_expires_at   | timestamptz | nullable                  | OTP expiry (15 min window). Cleared after use.               |
+| razorpay_order_id| text        | nullable                  | Set when payment order is created. Used for signature verify. |
 | created_at       | timestamptz | default now()             |                                                              |
 
 **`booking_status` enum values:**

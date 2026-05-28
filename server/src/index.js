@@ -23,6 +23,7 @@ app.use('/api/auth', require('./routes/auth'));
 app.use('/api/vendor', require('./routes/vendor'));
 app.use('/api/listings', require('./routes/listings'));
 app.use('/api/bookings', require('./routes/bookings'));
+app.use('/api/payments', require('./routes/payments'));
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);
